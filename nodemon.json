@@ -1,0 +1,6 @@
+{
+  "watch": ["__tests__"],
+  "ext": ".ts,.js",
+  "ignore": [],
+  "exec": "ts-node ./__tests__/integration.ts"
+}
