@@ -1,191 +1,85 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use secret_toolkit::crypto::sha_256;
 
-use crate::config::{Config, ContractMode};
-use cosmwasm_std::{
-    to_binary, Api, Binary, Extern, HumanAddr, Querier, StdError, StdResult, Storage, Uint128,
+use crate::{
+    msg::{DynamicItemData, GetItems, ItemData, QueryMsg, ResponseStatus},
+    state::{
+        get_category_item_dynamic_data, get_category_item_user_contact_data, get_category_items,
+        get_ctegory_user_items,
+    },
 };
-use secret_toolkit::permit::{validate, Permit};
-use secret_toolkit::snip20;
-use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
-
-use crate::vesting::{Schedule, Vesting};
-
-#[allow(clippy::large_enum_variant)]
-#[derive(Deserialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum QueryMsg {
-    Public(PublicQueryMsg),
-    WithAuth(AuthQuery),
-}
-
-#[derive(Deserialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub struct AuthQuery {
-    auth: Auth,
-    query: AuthQueryMsg,
-}
-
-impl AuthQuery {
-    fn check<S: Storage, A: Api, Q: Querier>(
-        self,
-        deps: &Extern<S, A, Q>,
-        config: &Config,
-    ) -> StdResult<(HumanAddr, AuthQueryMsg)> {
-        let address = self.auth.check(deps, config)?;
-        Ok((address, self.query))
-    }
-}
-
-pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
-
-#[derive(Deserialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Auth {
-    ViewingKey { address: HumanAddr, key: String },
-    Permit(Permit),
-}
-
-impl Auth {
-    /// Check if the auth parameters check out, and return the authorized account
-    fn check<S: Storage, A: Api, Q: Querier>(
-        self,
-        deps: &Extern<S, A, Q>,
-        config: &Config,
-    ) -> StdResult<HumanAddr> {
-        match self {
-            Self::ViewingKey { address, key } => {
-                ViewingKey::check(&deps.storage, &address, &key)?;
-                Ok(address)
-            }
-            Self::Permit(permit) => validate(
-                deps,
-                PREFIX_REVOKED_PERMITS,
-                &permit,
-                &config.contract_address,
-            ),
-        }
-    }
-}
-
-#[derive(Deserialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PublicQueryMsg {
-    ContractMode {},
-}
-
-#[derive(Deserialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthQueryMsg {
-    Balance { time: Option<u64> },
-    Admin(AdminQueryMsg),
-}
-
-#[derive(Deserialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AdminQueryMsg {
-    /// Get the status of the fund. Do we have enough funds in the account to cover everyone's vesting schedules?
-    FundStatus {},
-    BalanceOf {
-        address: HumanAddr,
-        time: Option<u64>,
-    },
-}
-
-#[derive(Serialize, Debug, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum QueryResp {
-    // Public
-    ContractMode(ContractMode),
-
-    // User
-    Balance {
-        address: HumanAddr,
-        available: Uint128,
-        schedule: Schedule,
-    },
-
-    // Admin
-    FundStatus {
-        /// How much in total is allocated right now
-        allocated: Uint128,
-        /// Our current SNIP-20 balance
-        reserve: Uint128,
-    },
-}
+use cosmwasm_std::{
+    to_binary, Api, Binary, Extern, HumanAddr, Querier, QueryResult, StdResult, Storage,
+};
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     msg: QueryMsg,
 ) -> StdResult<Binary> {
-    let config = Config::load(&deps.storage)?;
     match msg {
-        QueryMsg::Public(msg) => match msg {
-            PublicQueryMsg::ContractMode {} => get_contract_mode(config),
-        },
-        QueryMsg::WithAuth(auth_query) => {
-            let (address, query) = auth_query.check(deps, &config)?;
+        QueryMsg::GetItems { .. } => viewing_keys_queries(deps, msg),
+    }
+}
 
-            match query {
-                AuthQueryMsg::Balance { time } => balance(deps, config, address, time),
+pub fn viewing_keys_queries<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    msg: QueryMsg,
+) -> QueryResult {
+    msg.authenticate(deps)?;
 
-                AuthQueryMsg::Admin(msg) => {
-                    config.assert_admin(&address)?;
+    match msg {
+        QueryMsg::GetItems {
+            address, category, ..
+        } => to_binary(&may_get_items(deps, &address, category)?),
+    }
+}
 
-                    match msg {
-                        AdminQueryMsg::FundStatus {} => funds_status(deps, &config),
-                        AdminQueryMsg::BalanceOf { address, time } => {
-                            balance(deps, config, address, time)
-                        }
-                    }
+// Elad: move out the get prefix function to the calling function!
+// Elad: Replace all String with the proper &str
+pub fn may_get_items<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    account: &HumanAddr,
+    category: String,
+) -> StdResult<GetItems> {
+    let address = deps.api.canonical_address(account)?;
+
+    let (items_static_data, status) = get_category_items(&deps.storage, &category)?;
+    let mut items_data = Vec::new();
+    for item_static_data in items_static_data.iter() {
+        let key = sha_256(base64::encode(item_static_data.url.clone()).as_bytes());
+        let (quantity, status) = get_category_item_dynamic_data(&deps.storage, &category, &key)?;
+        items_data.push(ItemData {
+            static_data: item_static_data.clone(),
+            dynamic_data: {
+                DynamicItemData {
+                    current_group_size: quantity.current_group_size,
                 }
-            }
-        }
+            },
+        })
     }
-}
 
-fn balance<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-    mut config: Config,
-    address: HumanAddr,
-    time: Option<u64>,
-) -> StdResult<Binary> {
-    let schedule = Vesting::get_schedule(&deps.storage, &address)?
-        .ok_or_else(|| StdError::generic_err("No vesting schedule found"))?;
+    let (user_items, status) =
+        get_ctegory_user_items(&deps.storage, &category, &address.as_slice())?;
 
-    // Override the known last block time.
-    // `.available_at()` only cares about `config.last_block.time`
-    if let Some(time) = time {
-        config.last_block.time = time;
+    for user_items_iter in user_items.iter() {
+        let key = sha_256(base64::encode(user_items_iter.url.clone()).as_bytes());
+
+        let (contact_data, status) =
+            get_category_item_user_contact_data(&deps.storage, &category, &key, &account)?;
+
+        let result = GetItems {
+            items: items_data,
+            user_items,
+            contact_data: Some(contact_data),
+            status: ResponseStatus::Success,
+        };
+        return Ok(result);
     }
-    let available = Uint128(schedule.available_at(&config.last_block));
 
-    to_binary(&QueryResp::Balance {
-        address,
-        available,
-        schedule: schedule.into(),
-    })
-}
-
-fn get_contract_mode(config: Config) -> StdResult<Binary> {
-    to_binary(&QueryResp::ContractMode(config.mode))
-}
-
-fn funds_status<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-    config: &Config,
-) -> StdResult<Binary> {
-    let allocated = Uint128(Vesting::get_total_allocation(&deps.storage)?);
-
-    let reserve = snip20::balance_query(
-        &deps.querier,
-        config.contract_address.clone(),
-        config.vesting_token_vk.clone(),
-        256,
-        config.vesting_token.hash.clone(),
-        config.vesting_token.address.clone(),
-    )?
-    .amount;
-
-    to_binary(&QueryResp::FundStatus { reserve, allocated })
+    let result = GetItems {
+        items: items_data,
+        user_items,
+        contact_data: None,
+        status: ResponseStatus::Success,
+    };
+    return Ok(result);
 }

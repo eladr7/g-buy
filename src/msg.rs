@@ -1,6 +1,8 @@
-use cosmwasm_std::{HumanAddr, Uint128};
+use cosmwasm_std::{Api, Extern, HumanAddr, Querier, StdError, StdResult, Storage, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::viewing_key::{ViewingKey, VIEWING_KEY_SIZE};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
@@ -8,7 +10,7 @@ pub struct InitMsg {
     // pub prng_seed: String,
     // /// The entropy for creating the viewing key to be used by all users of the application
     // pub entropy: String,
-    msg: String,
+    pub msg: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
@@ -47,7 +49,7 @@ pub struct StaticItemData {
     pub price: Uint128,
     pub wanted_price: Uint128,
     pub group_size_goal: u32,
-}
+} // Elad: authenticate category
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct DynamicItemData {
@@ -56,8 +58,8 @@ pub struct DynamicItemData {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ItemData {
-    static_data: StaticItemData,
-    dynamic_data: DynamicItemData,
+    pub static_data: StaticItemData,
+    pub dynamic_data: DynamicItemData,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -69,17 +71,7 @@ pub struct UserProductData {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
-    AddItem {
-        name: String,
-        category: String,
-        url: String,
-        img_url: String,
-        seller_address: HumanAddr,
-        seller_email: String,
-        price: Uint128,
-        wanted_price: Uint128,
-        group_size_goal: u32,
-    },
+    AddItem(StaticItemData),
     UpdateItem {
         /// url is the unique identifier of the product (could be also the creator address)
         category: String,
@@ -101,7 +93,7 @@ pub enum HandleMsg {
 #[derive(Serialize, Deserialize, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleAnswer {
-    AddItem { status: String },
+    AddItem { status: ResponseStatus },
     UpdateItem { status: String },
     RemoveItem { status: String },
     SetViewingKey { status: ResponseStatus },
@@ -117,20 +109,47 @@ pub enum QueryMsg {
         key: String,
     },
 }
+
+impl QueryMsg {
+    pub fn authenticate<S: Storage, A: Api, Q: Querier>(
+        &self,
+        deps: &Extern<S, A, Q>,
+    ) -> StdResult<HumanAddr> {
+        let (address, key) = match self {
+            QueryMsg::GetItems { address, key, .. } => (address.clone(), ViewingKey(key.clone())),
+        };
+
+        let canonical_addr = deps.api.canonical_address(&address)?;
+
+        let expected_key = ViewingKey::read_viewing_key(&deps.storage, &canonical_addr);
+
+        if expected_key.is_none() {
+            // Checking the key will take significant time. We don't want to exit immediately if it isn't set
+            // in a way which will allow to time the command and determine if a viewing key doesn't exist
+            key.check_viewing_key(&[0u8; VIEWING_KEY_SIZE]);
+            Err(StdError::generic_err("Wrong viewing key"))
+        } else if key.check_viewing_key(expected_key.unwrap().as_slice()) {
+            Ok(address)
+        } else {
+            Err(StdError::generic_err("Wrong viewing key"))
+        }
+    }
+}
+
 /// Responses from query functions
 #[derive(Serialize, Deserialize, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryAnswer {
-    GetItems {
-        items: Vec<ItemData>,
-        user_items: Vec<UserProductData>,
-        contact_data: UserContactData,
-        status: String,
-    },
+    GetItems(GetItems),
 }
 
-// We define a custom struct for each query response
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct CountResponse {
-    pub count: i32,
+#[derive(Serialize, Deserialize, Debug, JsonSchema)]
+pub struct GetItems {
+    /// The list of items of the category (provided in QueryMsg::GetItems::category)
+    pub items: Vec<ItemData>,
+    /// The list of items the user participates in, if any
+    pub user_items: Vec<UserProductData>,
+    /// The contact data the user added when applied to an item
+    pub contact_data: Option<UserContactData>,
+    pub status: ResponseStatus,
 }

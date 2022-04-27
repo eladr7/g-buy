@@ -1,6 +1,8 @@
 pub mod contract;
 pub mod msg;
 pub mod state;
+mod utils;
+mod viewing_key;
 
 pub mod handle;
 pub mod init;
