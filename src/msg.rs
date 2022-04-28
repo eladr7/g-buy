@@ -27,15 +27,10 @@ pub struct UserContactData {
 } // regular store
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct UserQuantity {
-    pub quantity: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct UserItemDetails {
     pub account_address: HumanAddr,
     pub contact_data: UserContactData, // Elad: Option<>
-    pub quantity: UserQuantity,
+    pub quantity: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -52,18 +47,53 @@ pub struct StaticItemData {
 } // Elad: authenticate category
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct DynamicItemData {
-    pub current_group_size: u32, // Elad: Change to current_num_units
+pub struct UpdateItemData {
+    /// url is the unique identifier of the product (could be also the creator address)
+    pub category: String,
+    pub url: String,
+    pub user_details: UserItemDetails, //Elad: verify quantity is not 0 for a new user or seprate: AddUser/UpdateUser
+                                       // Elad: refund the user if the new ammount is smaller than the old
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct RemoveItemData {
+    pub category: String,
+    pub url: String,
+    pub verification_key: String,
+}
+impl RemoveItemData {
+    pub fn authenticate_delete<S: Storage, A: Api, Q: Querier>(
+        &self,
+        deps: &Extern<S, A, Q>,
+        address: &HumanAddr,
+    ) -> StdResult<()> {
+        let vk = ViewingKey(self.verification_key.clone());
+
+        let canonical_addr = deps.api.canonical_address(&address)?;
+
+        let expected_key = ViewingKey::read_viewing_key(&deps.storage, &canonical_addr);
+
+        if expected_key.is_none() {
+            // Checking the key will take significant time. We don't want to exit immediately if it isn't set
+            // in a way which will allow to time the command and determine if a viewing key doesn't exist
+            vk.check_viewing_key(&[0u8; VIEWING_KEY_SIZE]);
+            Err(StdError::generic_err("Authentication failed"))
+        } else if vk.check_viewing_key(expected_key.unwrap().as_slice()) {
+            Ok(())
+        } else {
+            Err(StdError::generic_err("Authentication failed"))
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ItemData {
     pub static_data: StaticItemData,
-    pub dynamic_data: DynamicItemData,
+    pub current_group_size: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct UserProductData {
+pub struct UserProductQuantity {
     pub url: String,
     pub quantity: u32,
 }
@@ -72,21 +102,9 @@ pub struct UserProductData {
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
     AddItem(StaticItemData),
-    UpdateItem {
-        /// url is the unique identifier of the product (could be also the creator address)
-        category: String,
-        url: String,
-        user_details: UserItemDetails, //Elad: verify quantity is not 0 for a new user or seprate: AddUser/UpdateUser
-                                       // Elad: refund the user if the new ammount is smaller than the old
-    },
-    RemoveItem {
-        category: String,
-        url: String,
-        verification_key: String,
-    },
-    SetViewingKey {
-        key: String,
-    },
+    UpdateItem(UpdateItemData),
+    RemoveItem(RemoveItemData),
+    SetViewingKey { key: String },
 }
 
 /// Responses from handle functions
@@ -94,8 +112,8 @@ pub enum HandleMsg {
 #[serde(rename_all = "snake_case")]
 pub enum HandleAnswer {
     AddItem { status: ResponseStatus },
-    UpdateItem { status: String },
-    RemoveItem { status: String },
+    UpdateItem { status: ResponseStatus },
+    RemoveItem { status: ResponseStatus },
     SetViewingKey { status: ResponseStatus },
 }
 
@@ -148,7 +166,7 @@ pub struct GetItems {
     /// The list of items of the category (provided in QueryMsg::GetItems::category)
     pub items: Vec<ItemData>,
     /// The list of items the user participates in, if any
-    pub user_items: Vec<UserProductData>,
+    pub user_items: Vec<UserProductQuantity>,
     /// The contact data the user added when applied to an item
     pub contact_data: Option<UserContactData>,
     pub status: ResponseStatus,

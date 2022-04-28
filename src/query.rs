@@ -1,10 +1,10 @@
 use secret_toolkit::crypto::sha_256;
 
 use crate::{
-    msg::{DynamicItemData, GetItems, ItemData, QueryMsg, ResponseStatus},
+    msg::{GetItems, ItemData, QueryMsg, ResponseStatus},
     state::{
-        get_category_item_dynamic_data, get_category_item_user_contact_data, get_category_items,
-        get_ctegory_user_items,
+        get_category_item_group_size, get_category_item_user_details, get_category_items,
+        get_category_prefixes, get_ctegory_user_items_quantities,
     },
 };
 use cosmwasm_std::{
@@ -42,34 +42,44 @@ pub fn may_get_items<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<GetItems> {
     let address = deps.api.canonical_address(account)?;
 
-    let (items_static_data, status) = get_category_items(&deps.storage, &category)?;
+    let (static_prefix, dynamic_prefix, dynamic_prefix_users) =
+        get_category_prefixes(category.as_bytes())?;
+    let items_static_data = get_category_items(&deps.storage, &static_prefix)?;
+
     let mut items_data = Vec::new();
     for item_static_data in items_static_data.iter() {
         let key = sha_256(base64::encode(item_static_data.url.clone()).as_bytes());
-        let (quantity, status) = get_category_item_dynamic_data(&deps.storage, &category, &key)?;
+        let current_group_size =
+            match get_category_item_group_size(&deps.storage, &dynamic_prefix, &key)? {
+                Some(v) => v,
+                None => 0,
+            };
         items_data.push(ItemData {
             static_data: item_static_data.clone(),
-            dynamic_data: {
-                DynamicItemData {
-                    current_group_size: quantity.current_group_size,
-                }
-            },
+            current_group_size,
         })
     }
 
-    let (user_items, status) =
-        get_ctegory_user_items(&deps.storage, &category, &address.as_slice())?;
+    let user_items =
+        get_ctegory_user_items_quantities(&deps.storage, &dynamic_prefix, &address.as_slice())?;
 
     for user_items_iter in user_items.iter() {
         let key = sha_256(base64::encode(user_items_iter.url.clone()).as_bytes());
 
-        let (contact_data, status) =
-            get_category_item_user_contact_data(&deps.storage, &category, &key, &account)?;
+        let contact_data = match get_category_item_user_details(
+            &deps.storage,
+            &dynamic_prefix_users,
+            &key,
+            &account,
+        )? {
+            Some(v) => Some(v.contact_data),
+            None => None,
+        };
 
         let result = GetItems {
             items: items_data,
             user_items,
-            contact_data: Some(contact_data),
+            contact_data,
             status: ResponseStatus::Success,
         };
         return Ok(result);
