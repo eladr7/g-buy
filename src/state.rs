@@ -97,7 +97,7 @@ pub fn remove_category_item<S: Storage>(
     url: &str,
 ) -> StdResult<()> {
     let mut storage = PrefixedStorage::multilevel(&[prefix_static], storage);
-    let mut storage = AppendStoreMut::<ItemData, _, _>::attach_or_create(&mut storage)?;
+    let mut storage = AppendStoreMut::<StaticItemData, _, _>::attach_or_create(&mut storage)?;
 
     match storage.len() {
         0 => Ok(()),
@@ -105,7 +105,7 @@ pub fn remove_category_item<S: Storage>(
             let mut c: u32 = 0;
             for item_data in storage.iter() {
                 let unwrapped = item_data?;
-                if unwrapped.static_data.url == url {
+                if unwrapped.url == url {
                     break;
                 }
                 c += 1;
@@ -164,6 +164,9 @@ pub fn update_current_group_size<S: Storage>(
 ) -> StdResult<()> {
     let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic, key], storage);
     let mut storage = AppendStoreMut::attach_or_create(&mut storage)?;
+    if storage.len() > 0 {
+        storage.pop()?;
+    }
     storage.push(&value)
 }
 pub fn get_category_item_group_size<S: ReadonlyStorage>(
@@ -222,6 +225,28 @@ pub fn save_category_element<T: Serialize, S: Storage>(
     let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic, key], storage);
     let mut storage = AppendStoreMut::attach_or_create(&mut storage)?;
     storage.push(&Bincode2::serialize(value)?)
+}
+
+pub fn save_category_element_user<S: Storage>(
+    storage: &mut S,
+    key: &[u8],
+    prefix_dynamic: &[u8], // key is the hash of the seller address with the item url
+    value: &UserProductQuantity,
+) -> StdResult<()> {
+    let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic, key], storage);
+    let mut storage = AppendStoreMut::attach_or_create(&mut storage)?;
+    storage.push(value)
+}
+
+pub fn save_category_element_user_item_details<S: Storage>(
+    storage: &mut S,
+    key: &[u8],
+    prefix_dynamic_users: &[u8], // key is the hash of the seller address with the item url
+    value: &UserItemDetails,
+) -> StdResult<()> {
+    let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic_users, key], storage);
+    let mut storage = AppendStoreMut::attach_or_create(&mut storage)?;
+    storage.push(value)
 }
 
 // remove_user_item_quantity(&mut deps.storage, &prefix_dynamic, &key, &update_item_data.url)?;
@@ -324,7 +349,7 @@ pub fn get_ctegory_user_items_quantities<S: ReadonlyStorage>(
 
     let user_category_items: StdResult<Vec<UserProductQuantity>> = store
         .iter()
-        .map(|itemData| itemData.and_then(|x| Ok(x)))
+        .map(|item_data| item_data.and_then(|x| Ok(x)))
         .collect();
     Ok(user_category_items?)
 }

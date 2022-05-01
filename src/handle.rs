@@ -3,12 +3,12 @@ use serde::Serialize;
 
 use crate::{
     msg::{HandleAnswer, HandleMsg, ResponseStatus, StaticItemData, UpdateItemData, UserProductQuantity, RemoveItemData},
-    state::{get_category_prefixes, save_new_item, update_current_group_size, get_category_item_by_url, get_category_item_group_size, get_category_user_items_quantities_by_url, save_category_element, remove_category_item, remove_user_item_quantity, remove_category_item_user_details, update_category_item_user_details, update_user_item_quantity, remove_current_group_size, get_all_participating_users_addresses, remove_all_category_item_users_details},
+    state::{get_category_prefixes, save_new_item, update_current_group_size, get_category_item_by_url, get_category_item_group_size, get_category_user_items_quantities_by_url, save_category_element, remove_category_item, remove_user_item_quantity, remove_category_item_user_details, update_category_item_user_details, update_user_item_quantity, remove_current_group_size, get_all_participating_users_addresses, remove_all_category_item_users_details, save_category_element_user, save_category_element_user_item_details},
     viewing_key::ViewingKey,
 };
 use cosmwasm_std::{
     to_binary, Api, Env, Extern, HandleResponse, HumanAddr, Querier, StdResult, Storage,
-    Uint128, StdError,
+    Uint128, StdError, CosmosMsg, BankMsg, Coin,
 };
 use secret_toolkit::crypto::sha_256;
 
@@ -114,30 +114,32 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
 
         // old_quantity_obj == NULL, new_quantity >0        
     
+        // If the goal is reached - transfer funds and and remove the item
+        if new_quantity + current_group_size >= item_data.group_size_goal {
+            // Elad: !!!!!!!!!!!!!!!!!
+            let seller_payment = (current_group_size + new_quantity) as u128 * item_data.wanted_price.u128();
+            let transfer_funds_msg = transfer_funds(&env.contract.address, &HumanAddr(item_data.seller_address), seller_payment)?;
+
+            remove_item_authenticated(&update_item_data.category, &update_item_data.url,  deps)?;
+
+            return Ok(transfer_funds_msg);
+        }
+
         // Save the new user quantity for this url
         let url = update_item_data.url.clone();
         let user_product_quantity = UserProductQuantity {
             url,
             quantity: new_quantity
         };
-        save_category_element(&mut deps.storage, &sender_canonical_address.as_slice(), dynamic_prefix, &user_product_quantity)?;
-
-
-        // If the goal is reached - transfer funds and and remove the item
-        if new_quantity + current_group_size >= item_data.group_size_goal {
-            // Elad: !!!!!!!!!!!!!!!!!
-            // let seller_payment = (current_group_size + new_quantity) * item_data.wanted_price.u128();
-            // Transfer_funds_and_remove_the_entire_item(&env.contract.address, &item_data.seller_address, seller_payment);
-
-            remove_item_authenticated(&update_item_data.category, &update_item_data.url,  deps)?;
-        }
+        save_category_element_user(&mut deps.storage, &sender_canonical_address.as_slice(), dynamic_prefix, &user_product_quantity)?;
+        
 
         // Update the current group size for this item
         update_current_group_size(&mut deps.storage, &url_key, dynamic_prefix, current_group_size + new_quantity)?;
 
 
         // Add the user details for this item
-        save_category_element(&mut deps.storage, &sender_canonical_address.as_slice(), dynamic_prefix_users, &update_item_data.user_details)?;
+        save_category_element_user_item_details(&mut deps.storage, &url_key, dynamic_prefix_users, &update_item_data.user_details)?;
 
         return Ok(HandleResponse {
             messages: vec![],
@@ -167,16 +169,17 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
         
         // Elad: !!!!!!!!!!!!!!!!!
         // refund the user: (the client side should charge the comission for that)
-        // let refund_amount = (old_quantity as u128) * item_data.wanted_price.u128();
-        // Transfer_funds_and_remove_the_entire_item(&env.contract.address, &update_item_data.user_details.account_address, refund_amount);
+        let refund_amount = (old_quantity as u128) * item_data.wanted_price.u128();
+        let transfer_funds_msg = transfer_funds(&env.contract.address, &update_item_data.user_details.account_address, refund_amount)?;
+        return Ok(transfer_funds_msg);
 
-        return Ok(HandleResponse {
-            messages: vec![],
-            log: vec![],
-            data: Some(to_binary(&HandleAnswer::UpdateItem {
-                status: ResponseStatus::Success,
-            })?),
-        });
+        // return Ok(HandleResponse {
+        //     messages: vec![],
+        //     log: vec![],
+        //     data: Some(to_binary(&HandleAnswer::UpdateItem {
+        //         status: ResponseStatus::Success,
+        //     })?),
+        // });
     }
 
     // old_quantity >0 , new_quantity > 0
@@ -193,17 +196,19 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
     if new_quantity < old_quantity {
         // Elad: !!!!!!!!!!!!!!!!!
         // refund the user: (the client side should charge the comission for that)
-        // let refund_amount = (old_quantity as u128 - new_quantity) * item_data.wanted_price.u128();
-        // Transfer_funds_and_remove_the_entire_item(&env.contract.address, &update_item_data.user_details.account_address, refund_amount);
+        let refund_amount = (old_quantity - new_quantity) as u128 * item_data.wanted_price.u128();
+        let transfer_funds_msg = transfer_funds(&env.contract.address, &update_item_data.user_details.account_address, refund_amount)?;
+        return Ok(transfer_funds_msg);
     }
 
     // If the group size goal was reached, pay the seller and remove the item
     if new_quantity > old_quantity && current_group_size + new_quantity - old_quantity >= item_data.group_size_goal {
         // Elad: !!!!!!!!!!!!!!!!!
-        // let seller_payment = (current_group_size + new_quantity - old_quantity as u128) * item_data.wanted_price.u128();
-        // Transfer_funds_and_remove_the_entire_item(&env.contract.address, &item_data.seller_address, seller_payment);
+        let seller_payment = (current_group_size + new_quantity - old_quantity) as u128 * item_data.wanted_price.u128();
+        let transfer_funds_msg = transfer_funds(&env.contract.address, &HumanAddr(item_data.seller_address), seller_payment)?;
 
         remove_item_authenticated(&update_item_data.category, &update_item_data.url,  deps)?;
+        return Ok(transfer_funds_msg);
     }
 
     Ok(HandleResponse {
@@ -213,6 +218,37 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
             status: ResponseStatus::Success,
         })?),
     })
+}
+
+fn transfer_funds(
+    from_address: &HumanAddr, 
+    to_address: &HumanAddr, amount: u128
+) -> StdResult<HandleResponse> {
+
+    let from_address = from_address.clone();
+    let to_address = to_address.clone();
+    let msg  = HandleResponse {
+        messages: vec![CosmosMsg::Bank(BankMsg::Send {
+            from_address,
+            to_address,
+            amount: vec![Coin {
+                denom: "uscrt".into(),
+                amount: Uint128(amount.into()),
+            }],
+        })],
+        log: vec![],
+        data: None,
+    };
+    // CosmosMsg::Bank(BankMsg::Send {
+    //     from_address: *from_address,
+    //     to_address: *to_address,
+    //     amount: vec![Coin {
+    //         denom: "uscrt".into(),
+    //         amount: Uint128(amount.into()),
+    //     }],
+    // });
+
+    Ok(msg)
 }
 
 fn remove_item<S: Storage, A: Api, Q: Querier>(
@@ -237,10 +273,20 @@ fn remove_item_authenticated<S: Storage, A: Api, Q: Querier>(category: &str ,url
     let (static_prefix, dynamic_prefix, dynamic_prefix_users) =
         get_category_prefixes(category.as_bytes())?;
     let url_key = sha_256(base64::encode(url.clone()).as_bytes());
+
     remove_category_item(&mut deps.storage, static_prefix, &url)?;
     remove_current_group_size(&mut deps.storage, dynamic_prefix, &url_key)?;
-    let users_addresses = get_all_participating_users_addresses(&deps.storage, dynamic_prefix_users, &url_key)?;
-    remove_all_category_item_users_details(&mut deps.storage,dynamic_prefix_users,&url_key)?;
+
+    let users_addresses = get_all_participating_users_addresses(
+        &deps.storage, 
+        dynamic_prefix_users, 
+        &url_key)?;
+
+    remove_all_category_item_users_details(
+        &mut deps.storage,
+        dynamic_prefix_users,
+        &url_key)?;
+        
     Ok(for user_address in users_addresses.iter() {
         // Remove the user's quantity object for this item (Find it by its URL)
         remove_user_item_quantity(&mut deps.storage, &dynamic_prefix, &deps.api.canonical_address(&user_address)?.as_slice(), &url)?;
@@ -269,7 +315,7 @@ pub fn set_viewing_key<S: Storage, A: Api, Q: Querier>(
 #[cfg(test)]
 mod tests {
     use crate::contract::init;
-    use crate::msg::{GetItems, InitMsg, QueryMsg};
+    use crate::msg::{GetItems, InitMsg, QueryMsg, UserItemDetails, UserContactData};
     use crate::query::query;
     use crate::viewing_key::ViewingKey;
 
@@ -353,6 +399,59 @@ mod tests {
         Ok(category_items_data)
     }
 
+    fn add_new_item_for_test(deps: &mut Extern<cosmwasm_std::MemoryStorage, MockApi, MockQuerier>, env: Env) {
+        let new_item_data = StaticItemData {
+            name: String::from("Item Name"),
+            category: String::from("laptops"),
+            url: String::from("www.item.com"),
+            img_url: String::from("www.image-item.com"),
+            seller_address: String::from("sellerAddress"),
+            seller_email: String::from("seller@email.com"),
+            price: Uint128(1000),
+            wanted_price: Uint128(900),
+            group_size_goal: 10,
+        };
+        let msg = HandleMsg::AddItem(new_item_data);
+        let _res = handle(deps, env, msg).unwrap();
+    }
+
+    fn remove_item_for_test(deps: &mut Extern<cosmwasm_std::MemoryStorage, MockApi, MockQuerier>, env: Env) {
+        let remove_msg = RemoveItemData {
+            category: String::from("laptops"),
+            url: String::from("www.item.com"),
+            verification_key: String::from("wefhjyr"),
+        };
+        let msg = HandleMsg::RemoveItem(remove_msg);
+        let _res = handle(deps, env, msg).unwrap();
+    }
+
+    fn create_update_msg(quantity: u32) -> UpdateItemData {
+        let user_details = UserItemDetails {
+            account_address: HumanAddr(String::from("bob")),
+            contact_data: UserContactData {
+                delivery_address: String::from("user delivery address"),
+                email: String::from("user@email.com"),
+            },
+            quantity: quantity
+        };
+        let update_item_data = UpdateItemData {
+            category: String::from("laptops"),
+            url: String::from("www.item.com"),
+            user_details
+        };
+        update_item_data
+    }
+
+    fn assert_fetched_data_after_update(fetched_data: GetItems, expected_len: usize, expected_quantity: u32, expected_group_size: u32) {
+        assert_eq!(fetched_data.user_items.len(), expected_len);
+        assert_eq!(fetched_data.user_items[0].url, String::from("www.item.com"));
+        assert_eq!(fetched_data.user_items[0].quantity, expected_quantity);
+        assert_eq!(fetched_data.contact_data.unwrap().email, String::from("user@email.com"));
+        assert_eq!(fetched_data.items[0].static_data.price, Uint128(1000));
+        assert_eq!(fetched_data.items[0].current_group_size, expected_group_size);
+        assert_eq!(fetched_data.status, ResponseStatus::Success);
+    }
+
     #[test]
     fn test_init_sanity() {
         let (init_result, _deps) = init_helper();
@@ -397,26 +496,233 @@ mod tests {
             init_result.err().unwrap()
         );
 
-        // Perform an Add operation
         let env = mock_env("bob", &coins(2, "token"));
-        let suka = StaticItemData {
-            name: String::from("suka"),
-            category: String::from("laptops"),
-            url: String::from("www.blat.com"),
-            img_url: String::from("www.image-blat.com"),
-            seller_address: String::from("sellerAddress"),
-            seller_email: String::from("seller@email.com"),
-            price: Uint128(1000),
-            wanted_price: Uint128(900),
-            group_size_goal: 10,
-        };
-        let msg = HandleMsg::AddItem(suka);
-        let _res = handle(&mut deps, env, msg).unwrap();
+        add_new_item_for_test(&mut deps, env);
 
         // Query the user's transactions history using their viewing key
         let fetched_data = query_category_items(&mut deps)?;
         assert_eq!(fetched_data.items[0].static_data.price, Uint128(1000));
         assert_eq!(fetched_data.items[0].current_group_size, 0);
+
+        // // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_new_item_goal_not_reached() -> StdResult<()> {
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env("bob", &coins(2, "token"));
+        let env_clone = env.clone();
+        add_new_item_for_test(&mut deps, env);
+
+        let update_item_data = create_update_msg(1);
+        let msg = HandleMsg::UpdateItem(update_item_data);
+        let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_fetched_data_after_update(fetched_data, 1, 1, 1);
+
+        // // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_new_item_goal_reached() -> StdResult<()> {
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env("bob", &coins(2, "token"));
+        let env_clone = env.clone();
+        add_new_item_for_test(&mut deps, env);
+
+        let update_item_data = create_update_msg(10);
+        let msg = HandleMsg::UpdateItem(update_item_data);
+        let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_eq!(fetched_data.user_items.len(), 0);
+        assert_eq!(fetched_data.contact_data, None);
+
+        assert_eq!(fetched_data.items.len(), 0);
+        assert_eq!(fetched_data.status, ResponseStatus::Success);
+
+        // // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_existing_item_goal_not_reached() -> StdResult<()> {
+                // Initialize the contract
+                let (init_result, mut deps) = init_helper();
+                assert!(
+                    init_result.is_ok(),
+                    "Init failed: {}",
+                    init_result.err().unwrap()
+                );
+        
+                let env = mock_env("bob", &coins(2, "token"));
+                let env_clone = env.clone();
+                let env_clone2 = env.clone();
+                add_new_item_for_test(&mut deps, env);
+
+                let update_item_data = create_update_msg(1);
+                let msg = HandleMsg::UpdateItem(update_item_data);
+                let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+                let update_item_data2 = create_update_msg(5);
+                let msg2 = HandleMsg::UpdateItem(update_item_data2);
+                let _res = handle(&mut deps, env_clone2, msg2).unwrap();
+                
+                let fetched_data = query_category_items(&mut deps)?;
+                assert_fetched_data_after_update(fetched_data, 1, 5, 5);
+        
+                // // Now try to hack into bob's account using the wrong key - and fail
+                query_history_wrong_vk(deps);
+                Ok(())
+    }
+
+    #[test]
+    fn test_update_existing_item_goal_reached() -> StdResult<()> {
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env("bob", &coins(2, "token"));
+        let env_clone = env.clone();
+        let env_clone2 = env.clone();
+        add_new_item_for_test(&mut deps, env);
+
+        let update_item_data = create_update_msg(1);
+        let msg = HandleMsg::UpdateItem(update_item_data);
+        let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+        let update_item_data2 = create_update_msg(10);
+        let msg2 = HandleMsg::UpdateItem(update_item_data2);
+        let _res = handle(&mut deps, env_clone2, msg2).unwrap();
+        
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_eq!(fetched_data.user_items.len(), 0);
+        assert_eq!(fetched_data.contact_data, None);
+
+        assert_eq!(fetched_data.items.len(), 0);
+        assert_eq!(fetched_data.status, ResponseStatus::Success);
+
+        // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_existing_item_reduce_quantity_partially() -> StdResult<()> {
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env("bob", &coins(2, "token"));
+        let env_clone = env.clone();
+        let env_clone2 = env.clone();
+        add_new_item_for_test(&mut deps, env);
+
+        let update_item_data = create_update_msg(5);
+        let msg = HandleMsg::UpdateItem(update_item_data);
+        let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+        let update_item_data2 = create_update_msg(2);
+        let msg2 = HandleMsg::UpdateItem(update_item_data2);
+        let _res = handle(&mut deps, env_clone2, msg2).unwrap();
+        
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_fetched_data_after_update(fetched_data, 1, 2, 2);
+
+        // // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_existing_item_reduce_quantity_completely() -> StdResult<()> {
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env("bob", &coins(2, "token"));
+        let env_clone = env.clone();
+        let env_clone2 = env.clone();
+        add_new_item_for_test(&mut deps, env);
+
+        let update_item_data = create_update_msg(5);
+        let msg = HandleMsg::UpdateItem(update_item_data);
+        let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+        let update_item_data2 = create_update_msg(0);
+        let msg2 = HandleMsg::UpdateItem(update_item_data2);
+        let _res = handle(&mut deps, env_clone2, msg2).unwrap();
+        
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_eq!(fetched_data.user_items.len(), 0);
+        assert_eq!(fetched_data.contact_data, None);
+
+        assert_eq!(fetched_data.items.len(), 1);
+        assert_eq!(fetched_data.status, ResponseStatus::Success);
+
+        // // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_item() -> StdResult<()> {
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+
+        let env = mock_env("bob", &coins(2, "token"));
+        let env2 = env.clone();
+        add_new_item_for_test(&mut deps, env);
+
+        // Query the user's transactions history using their viewing key
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_eq!(fetched_data.items[0].static_data.price, Uint128(1000));
+        assert_eq!(fetched_data.items[0].current_group_size, 0);
+
+        remove_item_for_test(&mut deps, env2);
+        let fetched_data2 = query_category_items(&mut deps)?;
+        assert_eq!(fetched_data2.user_items.len(), 0);
+        assert_eq!(fetched_data2.contact_data, None);
+
+        assert_eq!(fetched_data2.items.len(), 0);
+        assert_eq!(fetched_data2.status, ResponseStatus::Success);
 
         // // Now try to hack into bob's account using the wrong key - and fail
         query_history_wrong_vk(deps);
