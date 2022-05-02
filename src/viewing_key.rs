@@ -5,13 +5,12 @@ use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{CanonicalAddr, Env, Storage};
-use secret_toolkit::crypto::{sha_256, Prng};
+use cosmwasm_std::{CanonicalAddr, Storage};
 
 use crate::utils::{create_hashed_password, ct_slice_compare};
 
 pub const VIEWING_KEY_SIZE: usize = 32;
-pub const VIEWING_KEY_PREFIX: &str = "api_key_";
+// pub const VIEWING_KEY_PREFIX: &str = "api_key_";
 pub const PREFIX_VIEWING_KEY: &[u8] = b"viewingkey";
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -24,31 +23,31 @@ impl ViewingKey {
         ct_slice_compare(&mine_hashed, hashed_pw)
     }
 
-    pub fn new(env: &Env, seed: &[u8], entropy: &[u8]) -> Self {
-        // 16 here represents the lengths in bytes of the block height and time.
-        let entropy_len = 16 + env.message.sender.len() + entropy.len();
-        let mut rng_entropy = Vec::with_capacity(entropy_len);
-        rng_entropy.extend_from_slice(&env.block.height.to_be_bytes());
-        rng_entropy.extend_from_slice(&env.block.time.to_be_bytes());
-        rng_entropy.extend_from_slice(env.message.sender.0.as_bytes());
-        rng_entropy.extend_from_slice(entropy);
+    // pub fn new(env: &Env, seed: &[u8], entropy: &[u8]) -> Self {
+    //     // 16 here represents the lengths in bytes of the block height and time.
+    //     let entropy_len = 16 + env.message.sender.len() + entropy.len();
+    //     let mut rng_entropy = Vec::with_capacity(entropy_len);
+    //     rng_entropy.extend_from_slice(&env.block.height.to_be_bytes());
+    //     rng_entropy.extend_from_slice(&env.block.time.to_be_bytes());
+    //     rng_entropy.extend_from_slice(env.message.sender.0.as_bytes());
+    //     rng_entropy.extend_from_slice(entropy);
 
-        let mut rng = Prng::new(seed, &rng_entropy);
+    //     let mut rng = Prng::new(seed, &rng_entropy);
 
-        let rand_slice = rng.rand_bytes();
+    //     let rand_slice = rng.rand_bytes();
 
-        let key = sha_256(&rand_slice);
+    //     let key = sha_256(&rand_slice);
 
-        Self(VIEWING_KEY_PREFIX.to_string() + &base64::encode(key))
-    }
+    //     Self(VIEWING_KEY_PREFIX.to_string() + &base64::encode(key))
+    // }
 
     pub fn to_hashed(&self) -> [u8; VIEWING_KEY_SIZE] {
         create_hashed_password(&self.0)
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
+    // pub fn as_bytes(&self) -> &[u8] {
+    //     self.0.as_bytes()
+    // }
 
     pub fn write_viewing_key<S: Storage>(store: &mut S, owner: &CanonicalAddr, key: &ViewingKey) {
         let mut user_key_store = PrefixedStorage::new(PREFIX_VIEWING_KEY, store);

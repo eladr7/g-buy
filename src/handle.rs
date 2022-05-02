@@ -2,13 +2,24 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::{
-    msg::{HandleAnswer, HandleMsg, ResponseStatus, StaticItemData, UpdateItemData, UserProductQuantity, RemoveItemData},
-    state::{get_category_prefixes, save_new_item, update_current_group_size, get_category_item_by_url, get_category_item_group_size, get_category_user_items_quantities_by_url, save_category_element, remove_category_item, remove_user_item_quantity, remove_category_item_user_details, update_category_item_user_details, update_user_item_quantity, remove_current_group_size, get_all_participating_users_addresses, remove_all_category_item_users_details, save_category_element_user, save_category_element_user_item_details},
+    msg::{
+        HandleAnswer, HandleMsg, RemoveItemData, ResponseStatus, StaticItemData, UpdateItemData,
+        UserProductQuantity,
+    },
+    state::{
+        get_all_participating_users_addresses, get_category_item_by_url,
+        get_category_item_group_size, get_category_prefixes,
+        get_category_user_items_quantities_by_url, remove_all_category_item_users_details,
+        remove_category_item, remove_category_item_user_details, remove_current_group_size,
+        remove_user_item_quantity, save_category_element_user,
+        save_category_element_user_item_details, save_new_item, update_category_item_user_details,
+        update_current_group_size, update_user_item_quantity,
+    },
     viewing_key::ViewingKey,
 };
 use cosmwasm_std::{
-    to_binary, Api, Env, Extern, HandleResponse, HumanAddr, Querier, StdResult, Storage,
-    Uint128, StdError, CosmosMsg, BankMsg, Coin,
+    to_binary, Api, BankMsg, Coin, CosmosMsg, Env, Extern, HandleResponse, HumanAddr, Querier,
+    StdError, StdResult, Storage, Uint128,
 };
 use secret_toolkit::crypto::sha_256;
 
@@ -25,37 +36,20 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> StdResult<HandleResponse> {
     match msg {
-        HandleMsg::AddItem(static_item_data) => add_new_item(deps, env, static_item_data),
-        HandleMsg::UpdateItem(update_item_data) => update_user_for_item(deps, env, update_item_data),
+        HandleMsg::AddItem(static_item_data) => add_new_item(deps, static_item_data),
+        HandleMsg::UpdateItem(update_item_data) => {
+            update_user_for_item(deps, env, update_item_data)
+        }
         HandleMsg::RemoveItem(remove_item_data) => remove_item(deps, env, remove_item_data),
         HandleMsg::SetViewingKey { key, .. } => set_viewing_key(deps, env, key),
-        // Elad::update:: if the goal is reached - transfer the money and remove the item!
-        _ => {
-            println!("Not impl yet");
-            Ok(HandleResponse {
-                messages: vec![],
-                log: vec![],
-                data: Some(to_binary(&HandleAnswer::AddItem {
-                    status: ResponseStatus::Success,
-                })?),
-            })
-        }
-        // HandleMsg::UpdateItem((n1, n2)) => sub(deps, env, n1, n2),
-        // HandleMsg::RemoveItem((n1, n2)) => mul(deps, env, n1, n2),
-        
     }
 }
 
 fn add_new_item<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
-    env: Env,
     static_item_data: StaticItemData,
 ) -> StdResult<HandleResponse> {
-    // Elad: Can add authentication with the viewing key
-    // let sender_address = env.message.sender;
-    // let sender_canonical_address = deps.api.canonical_address(&sender_address)?;
-
-    let (static_prefix, dynamic_prefix, dynamic_prefix_users) =
+    let (static_prefix, dynamic_prefix, _dynamic_prefix_users) =
         get_category_prefixes(static_item_data.category.as_bytes())?;
 
     save_new_item(&mut deps.storage, static_prefix, &static_item_data)?;
@@ -82,45 +76,65 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
 
     // Verify the new quantity is a non-negative number
     let new_quantity = update_item_data.user_details.quantity;
-    if new_quantity < 0 {
-        return Err(StdError::generic_err("Item quantity smaller than 0 is not allowed"));
-    }
-    
+    // if new_quantity < 0 {
+    //     return Err(StdError::generic_err(
+    //         "Item quantity smaller than 0 is not allowed",
+    //     ));
+    // }
+
     // Get the current product count of units: [dynamic_prefix, url]
     let (static_prefix, dynamic_prefix, dynamic_prefix_users) =
         get_category_prefixes(update_item_data.category.as_bytes())?;
     let url_key = sha_256(base64::encode(update_item_data.url.clone()).as_bytes());
 
     //    find [category] --> (url) and get price
-    let item_data = match get_category_item_by_url(&deps.storage, &static_prefix, &update_item_data.url)? {
-        Some(v) => v,
-        None => return Err(StdError::generic_err("Item data wasn't found. It should exist in this context"))
-    };
+    let item_data =
+        match get_category_item_by_url(&deps.storage, static_prefix, &update_item_data.url)? {
+            Some(v) => v,
+            None => {
+                return Err(StdError::generic_err(
+                    "Item data wasn't found. It should exist in this context",
+                ))
+            }
+        };
 
-    let current_group_size = match get_category_item_group_size(&deps.storage, dynamic_prefix, &url_key)? {
-        Some(current_group_size) => current_group_size,
-        None => return Err(StdError::generic_err("This item does not exist anymore"))
-    };
+    let current_group_size =
+        match get_category_item_group_size(&deps.storage, dynamic_prefix, &url_key)? {
+            Some(current_group_size) => current_group_size,
+            None => return Err(StdError::generic_err("This item does not exist anymore")),
+        };
 
     // The item exists and the new user quantity is proper
 
     // Find the old user count:  [dynamic_prefix, address] => (url, quanity)
-    let old_quantity_obj = get_category_user_items_quantities_by_url(&deps.storage, &dynamic_prefix, &sender_canonical_address.as_slice(), &update_item_data.url)?;
+    let old_quantity_obj = get_category_user_items_quantities_by_url(
+        &deps.storage,
+        dynamic_prefix,
+        sender_canonical_address.as_slice(),
+        &update_item_data.url,
+    )?;
 
     if old_quantity_obj == None {
-        if  new_quantity == 0 {
-            return Err(StdError::generic_err("Cannot join a purchasing group with 0 quantity"));
+        if new_quantity == 0 {
+            return Err(StdError::generic_err(
+                "Cannot join a purchasing group with 0 quantity",
+            ));
         }
 
-        // old_quantity_obj == NULL, new_quantity >0        
-    
+        // old_quantity_obj == NULL, new_quantity >0
+
         // If the goal is reached - transfer funds and and remove the item
         if new_quantity + current_group_size >= item_data.group_size_goal {
             // Elad: !!!!!!!!!!!!!!!!!
-            let seller_payment = (current_group_size + new_quantity) as u128 * item_data.wanted_price.u128();
-            let transfer_funds_msg = transfer_funds(&env.contract.address, &HumanAddr(item_data.seller_address), seller_payment)?;
+            let seller_payment =
+                (current_group_size + new_quantity) as u128 * item_data.wanted_price.u128();
+            let transfer_funds_msg = transfer_funds(
+                &env.contract.address,
+                &HumanAddr(item_data.seller_address),
+                seller_payment,
+            )?;
 
-            remove_item_authenticated(&update_item_data.category, &update_item_data.url,  deps)?;
+            remove_item_authenticated(&update_item_data.category, &update_item_data.url, deps)?;
 
             return Ok(transfer_funds_msg);
         }
@@ -129,17 +143,30 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
         let url = update_item_data.url.clone();
         let user_product_quantity = UserProductQuantity {
             url,
-            quantity: new_quantity
+            quantity: new_quantity,
         };
-        save_category_element_user(&mut deps.storage, &sender_canonical_address.as_slice(), dynamic_prefix, &user_product_quantity)?;
-        
+        save_category_element_user(
+            &mut deps.storage,
+            sender_canonical_address.as_slice(),
+            dynamic_prefix,
+            &user_product_quantity,
+        )?;
 
         // Update the current group size for this item
-        update_current_group_size(&mut deps.storage, &url_key, dynamic_prefix, current_group_size + new_quantity)?;
-
+        update_current_group_size(
+            &mut deps.storage,
+            &url_key,
+            dynamic_prefix,
+            current_group_size + new_quantity,
+        )?;
 
         // Add the user details for this item
-        save_category_element_user_item_details(&mut deps.storage, &url_key, dynamic_prefix_users, &update_item_data.user_details)?;
+        save_category_element_user_item_details(
+            &mut deps.storage,
+            &url_key,
+            dynamic_prefix_users,
+            &update_item_data.user_details,
+        )?;
 
         return Ok(HandleResponse {
             messages: vec![],
@@ -150,27 +177,45 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
         });
     }
 
-    
     let old_quantity = old_quantity_obj.unwrap().quantity;
 
     // old_quantity is positive
-    
-    if  new_quantity == 0 {
+
+    if new_quantity == 0 {
         // old_quantity > 0, new_quantity == 0
 
         // Update the current group size of this item to 'current_group_size  - old_quantity'
-        update_current_group_size(&mut deps.storage, &url_key, dynamic_prefix, current_group_size  - old_quantity)?;
+        update_current_group_size(
+            &mut deps.storage,
+            &url_key,
+            dynamic_prefix,
+            current_group_size - old_quantity,
+        )?;
 
         // Remove the user details entry for this item
-        remove_category_item_user_details(&mut deps.storage,dynamic_prefix_users,&url_key,&env.message.sender)?;
-        
+        remove_category_item_user_details(
+            &mut deps.storage,
+            dynamic_prefix_users,
+            &url_key,
+            &env.message.sender,
+        )?;
+
         // Remove the count for this item (Find it by its URL)
-        remove_user_item_quantity(&mut deps.storage, &dynamic_prefix, &sender_canonical_address.as_slice(), &update_item_data.url)?;
-        
+        remove_user_item_quantity(
+            &mut deps.storage,
+            dynamic_prefix,
+            sender_canonical_address.as_slice(),
+            &update_item_data.url,
+        )?;
+
         // Elad: !!!!!!!!!!!!!!!!!
         // refund the user: (the client side should charge the comission for that)
         let refund_amount = (old_quantity as u128) * item_data.wanted_price.u128();
-        let transfer_funds_msg = transfer_funds(&env.contract.address, &update_item_data.user_details.account_address, refund_amount)?;
+        let transfer_funds_msg = transfer_funds(
+            &env.contract.address,
+            &update_item_data.user_details.account_address,
+            refund_amount,
+        )?;
         return Ok(transfer_funds_msg);
 
         // return Ok(HandleResponse {
@@ -185,29 +230,55 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
     // old_quantity >0 , new_quantity > 0
 
     // Update the current group size for this item
-    update_current_group_size(&mut deps.storage, &url_key, dynamic_prefix, current_group_size + new_quantity - old_quantity)?;
+    update_current_group_size(
+        &mut deps.storage,
+        &url_key,
+        dynamic_prefix,
+        current_group_size + new_quantity - old_quantity,
+    )?;
 
     // Update the user details for this item
-    update_category_item_user_details(&mut deps.storage, dynamic_prefix_users, &url_key, &update_item_data)?;
+    update_category_item_user_details(
+        &mut deps.storage,
+        dynamic_prefix_users,
+        &url_key,
+        &update_item_data,
+    )?;
 
     // Update the user item quantity
-    update_user_item_quantity(&mut deps.storage, dynamic_prefix, &sender_canonical_address.as_slice(), &update_item_data)?;
-    
+    update_user_item_quantity(
+        &mut deps.storage,
+        dynamic_prefix,
+        sender_canonical_address.as_slice(),
+        &update_item_data,
+    )?;
+
     if new_quantity < old_quantity {
         // Elad: !!!!!!!!!!!!!!!!!
         // refund the user: (the client side should charge the comission for that)
         let refund_amount = (old_quantity - new_quantity) as u128 * item_data.wanted_price.u128();
-        let transfer_funds_msg = transfer_funds(&env.contract.address, &update_item_data.user_details.account_address, refund_amount)?;
+        let transfer_funds_msg = transfer_funds(
+            &env.contract.address,
+            &update_item_data.user_details.account_address,
+            refund_amount,
+        )?;
         return Ok(transfer_funds_msg);
     }
 
     // If the group size goal was reached, pay the seller and remove the item
-    if new_quantity > old_quantity && current_group_size + new_quantity - old_quantity >= item_data.group_size_goal {
+    if new_quantity > old_quantity
+        && current_group_size + new_quantity - old_quantity >= item_data.group_size_goal
+    {
         // Elad: !!!!!!!!!!!!!!!!!
-        let seller_payment = (current_group_size + new_quantity - old_quantity) as u128 * item_data.wanted_price.u128();
-        let transfer_funds_msg = transfer_funds(&env.contract.address, &HumanAddr(item_data.seller_address), seller_payment)?;
+        let seller_payment = (current_group_size + new_quantity - old_quantity) as u128
+            * item_data.wanted_price.u128();
+        let transfer_funds_msg = transfer_funds(
+            &env.contract.address,
+            &HumanAddr(item_data.seller_address),
+            seller_payment,
+        )?;
 
-        remove_item_authenticated(&update_item_data.category, &update_item_data.url,  deps)?;
+        remove_item_authenticated(&update_item_data.category, &update_item_data.url, deps)?;
         return Ok(transfer_funds_msg);
     }
 
@@ -221,19 +292,19 @@ fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
 }
 
 fn transfer_funds(
-    from_address: &HumanAddr, 
-    to_address: &HumanAddr, amount: u128
+    from_address: &HumanAddr,
+    to_address: &HumanAddr,
+    amount: u128,
 ) -> StdResult<HandleResponse> {
-
     let from_address = from_address.clone();
     let to_address = to_address.clone();
-    let msg  = HandleResponse {
+    let msg = HandleResponse {
         messages: vec![CosmosMsg::Bank(BankMsg::Send {
             from_address,
             to_address,
             amount: vec![Coin {
                 denom: "uscrt".into(),
-                amount: Uint128(amount.into()),
+                amount: Uint128(amount),
             }],
         })],
         log: vec![],
@@ -259,7 +330,7 @@ fn remove_item<S: Storage, A: Api, Q: Querier>(
     remove_item_data.authenticate_delete(deps, &env.message.sender)?;
 
     remove_item_authenticated(&remove_item_data.category, &remove_item_data.url, deps)?;
-    
+
     Ok(HandleResponse {
         messages: vec![],
         log: vec![],
@@ -269,28 +340,34 @@ fn remove_item<S: Storage, A: Api, Q: Querier>(
     })
 }
 
-fn remove_item_authenticated<S: Storage, A: Api, Q: Querier>(category: &str ,url: &str, deps: &mut Extern<S, A, Q>) -> Result<(), StdError> {
+fn remove_item_authenticated<S: Storage, A: Api, Q: Querier>(
+    category: &str,
+    url: &str,
+    deps: &mut Extern<S, A, Q>,
+) -> Result<(), StdError> {
     let (static_prefix, dynamic_prefix, dynamic_prefix_users) =
         get_category_prefixes(category.as_bytes())?;
-    let url_key = sha_256(base64::encode(url.clone()).as_bytes());
+    let url_key = sha_256(base64::encode(url).as_bytes());
 
-    remove_category_item(&mut deps.storage, static_prefix, &url)?;
+    remove_category_item(&mut deps.storage, static_prefix, url)?;
     remove_current_group_size(&mut deps.storage, dynamic_prefix, &url_key)?;
 
-    let users_addresses = get_all_participating_users_addresses(
-        &deps.storage, 
-        dynamic_prefix_users, 
-        &url_key)?;
+    let users_addresses =
+        get_all_participating_users_addresses(&deps.storage, dynamic_prefix_users, &url_key)?;
 
-    remove_all_category_item_users_details(
-        &mut deps.storage,
-        dynamic_prefix_users,
-        &url_key)?;
-        
-    Ok(for user_address in users_addresses.iter() {
+    remove_all_category_item_users_details(&mut deps.storage, dynamic_prefix_users, &url_key)?;
+
+    for user_address in users_addresses.iter() {
         // Remove the user's quantity object for this item (Find it by its URL)
-        remove_user_item_quantity(&mut deps.storage, &dynamic_prefix, &deps.api.canonical_address(&user_address)?.as_slice(), &url)?;
-    })
+        remove_user_item_quantity(
+            &mut deps.storage,
+            dynamic_prefix,
+            deps.api.canonical_address(user_address)?.as_slice(),
+            url,
+        )?;
+    }
+
+    Ok(())
 }
 
 pub fn set_viewing_key<S: Storage, A: Api, Q: Querier>(
@@ -315,7 +392,7 @@ pub fn set_viewing_key<S: Storage, A: Api, Q: Querier>(
 #[cfg(test)]
 mod tests {
     use crate::contract::init;
-    use crate::msg::{GetItems, InitMsg, QueryMsg, UserItemDetails, UserContactData};
+    use crate::msg::{GetItems, InitMsg, QueryMsg, UserContactData, UserItemDetails};
     use crate::query::query;
     use crate::viewing_key::ViewingKey;
 
@@ -399,9 +476,12 @@ mod tests {
         Ok(category_items_data)
     }
 
-    fn add_new_item_for_test(deps: &mut Extern<cosmwasm_std::MemoryStorage, MockApi, MockQuerier>, env: Env) {
+    fn add_new_item_for_test(
+        deps: &mut Extern<cosmwasm_std::MemoryStorage, MockApi, MockQuerier>,
+        env: Env,
+    ) {
         let new_item_data = StaticItemData {
-            name: String::from("Item Name"),
+            name: String::from("Cool item"),
             category: String::from("laptops"),
             url: String::from("www.item.com"),
             img_url: String::from("www.image-item.com"),
@@ -415,7 +495,10 @@ mod tests {
         let _res = handle(deps, env, msg).unwrap();
     }
 
-    fn remove_item_for_test(deps: &mut Extern<cosmwasm_std::MemoryStorage, MockApi, MockQuerier>, env: Env) {
+    fn remove_item_for_test(
+        deps: &mut Extern<cosmwasm_std::MemoryStorage, MockApi, MockQuerier>,
+        env: Env,
+    ) {
         let remove_msg = RemoveItemData {
             category: String::from("laptops"),
             url: String::from("www.item.com"),
@@ -432,23 +515,34 @@ mod tests {
                 delivery_address: String::from("user delivery address"),
                 email: String::from("user@email.com"),
             },
-            quantity: quantity
+            quantity: quantity,
         };
         let update_item_data = UpdateItemData {
             category: String::from("laptops"),
             url: String::from("www.item.com"),
-            user_details
+            user_details,
         };
         update_item_data
     }
 
-    fn assert_fetched_data_after_update(fetched_data: GetItems, expected_len: usize, expected_quantity: u32, expected_group_size: u32) {
+    fn assert_fetched_data_after_update(
+        fetched_data: GetItems,
+        expected_len: usize,
+        expected_quantity: u32,
+        expected_group_size: u32,
+    ) {
         assert_eq!(fetched_data.user_items.len(), expected_len);
         assert_eq!(fetched_data.user_items[0].url, String::from("www.item.com"));
         assert_eq!(fetched_data.user_items[0].quantity, expected_quantity);
-        assert_eq!(fetched_data.contact_data.unwrap().email, String::from("user@email.com"));
+        assert_eq!(
+            fetched_data.contact_data.unwrap().email,
+            String::from("user@email.com")
+        );
         assert_eq!(fetched_data.items[0].static_data.price, Uint128(1000));
-        assert_eq!(fetched_data.items[0].current_group_size, expected_group_size);
+        assert_eq!(
+            fetched_data.items[0].current_group_size,
+            expected_group_size
+        );
         assert_eq!(fetched_data.status, ResponseStatus::Success);
     }
 
@@ -567,33 +661,33 @@ mod tests {
 
     #[test]
     fn test_update_existing_item_goal_not_reached() -> StdResult<()> {
-                // Initialize the contract
-                let (init_result, mut deps) = init_helper();
-                assert!(
-                    init_result.is_ok(),
-                    "Init failed: {}",
-                    init_result.err().unwrap()
-                );
-        
-                let env = mock_env("bob", &coins(2, "token"));
-                let env_clone = env.clone();
-                let env_clone2 = env.clone();
-                add_new_item_for_test(&mut deps, env);
+        // Initialize the contract
+        let (init_result, mut deps) = init_helper();
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
 
-                let update_item_data = create_update_msg(1);
-                let msg = HandleMsg::UpdateItem(update_item_data);
-                let _res = handle(&mut deps, env_clone, msg).unwrap();
+        let env = mock_env("bob", &coins(2, "token"));
+        let env_clone = env.clone();
+        let env_clone2 = env.clone();
+        add_new_item_for_test(&mut deps, env);
 
-                let update_item_data2 = create_update_msg(5);
-                let msg2 = HandleMsg::UpdateItem(update_item_data2);
-                let _res = handle(&mut deps, env_clone2, msg2).unwrap();
-                
-                let fetched_data = query_category_items(&mut deps)?;
-                assert_fetched_data_after_update(fetched_data, 1, 5, 5);
-        
-                // // Now try to hack into bob's account using the wrong key - and fail
-                query_history_wrong_vk(deps);
-                Ok(())
+        let update_item_data = create_update_msg(1);
+        let msg = HandleMsg::UpdateItem(update_item_data);
+        let _res = handle(&mut deps, env_clone, msg).unwrap();
+
+        let update_item_data2 = create_update_msg(5);
+        let msg2 = HandleMsg::UpdateItem(update_item_data2);
+        let _res = handle(&mut deps, env_clone2, msg2).unwrap();
+
+        let fetched_data = query_category_items(&mut deps)?;
+        assert_fetched_data_after_update(fetched_data, 1, 5, 5);
+
+        // // Now try to hack into bob's account using the wrong key - and fail
+        query_history_wrong_vk(deps);
+        Ok(())
     }
 
     #[test]
@@ -618,7 +712,7 @@ mod tests {
         let update_item_data2 = create_update_msg(10);
         let msg2 = HandleMsg::UpdateItem(update_item_data2);
         let _res = handle(&mut deps, env_clone2, msg2).unwrap();
-        
+
         let fetched_data = query_category_items(&mut deps)?;
         assert_eq!(fetched_data.user_items.len(), 0);
         assert_eq!(fetched_data.contact_data, None);
@@ -653,7 +747,7 @@ mod tests {
         let update_item_data2 = create_update_msg(2);
         let msg2 = HandleMsg::UpdateItem(update_item_data2);
         let _res = handle(&mut deps, env_clone2, msg2).unwrap();
-        
+
         let fetched_data = query_category_items(&mut deps)?;
         assert_fetched_data_after_update(fetched_data, 1, 2, 2);
 
@@ -684,7 +778,7 @@ mod tests {
         let update_item_data2 = create_update_msg(0);
         let msg2 = HandleMsg::UpdateItem(update_item_data2);
         let _res = handle(&mut deps, env_clone2, msg2).unwrap();
-        
+
         let fetched_data = query_category_items(&mut deps)?;
         assert_eq!(fetched_data.user_items.len(), 0);
         assert_eq!(fetched_data.contact_data, None);

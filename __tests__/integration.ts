@@ -26,6 +26,18 @@ type Account = {
   secretjs: SecretNetworkClient;
 };
 
+type StaticItemData = {
+  name: string,
+  category: string, // Elad: Might be redundant.
+  url: string,
+  img_url: string,
+  seller_address: string,
+  seller_email: string,
+  price: number,
+  wanted_price: number,
+  group_size_goal: number,
+} 
+
 const accounts: Account[] = [];
 
 async function sleep(ms: number) {
@@ -54,15 +66,15 @@ function getValueFromRawLog(rawLog: string | undefined, key: string): string {
   return "";
 }
 
-async function performCreateViewingKey(secretjs: SecretNetworkClient, contractAddress: string) {
+async function performSetViewingKey(secretjs: SecretNetworkClient, contractAddress: string) {
   const txExec = await secretjs.tx.compute.executeContract(
     {
       sender: accounts[0].address,
       contract: contractAddress,
       // codeHash,
       msg: {
-        create_viewing_key: {
-          entropy: "bla bla",
+        set_viewing_key: {
+          key: "wefhjyr",
         },
       },
     },
@@ -70,25 +82,26 @@ async function performCreateViewingKey(secretjs: SecretNetworkClient, contractAd
       gasLimit: 5000000,
     }
   );
+  console.log(fromUtf8(txExec.data[0]))
   expect(fromUtf8(txExec.data[0])).toContain(
-    '{"create_viewing_key":{"key":"'
+    '{"set_viewing_key":{"status":"'
   );
-  const viewingKey = JSON.parse(fromUtf8(txExec.data[0])).create_viewing_key.key;
+  const viewingKey = JSON.parse(fromUtf8(txExec.data[0])).set_viewing_key.key;
   return viewingKey;
 }
 
-async function performSomething(contractAddress: string, secretjs: SecretNetworkClient, operation: string, param: string) {
-  let addMsg: MsgExecuteContract;
+async function performSomething(contractAddress: string, secretjs: SecretNetworkClient, operation: string, param: StaticItemData) {
+  let addItemMsg: MsgExecuteContract;
 
-    addMsg = new MsgExecuteContract({
+    addItemMsg = new MsgExecuteContract({
       sender: accounts[0].address,
       contract: contractAddress,
       // codeHash, // Test MsgExecuteContract without codeHash
-      msg: { [operation]: param },
+      msg: { [operation]: {...param} },
       sentFunds: [],
     });
 
-  const tx = await secretjs.tx.broadcast([addMsg], {
+  const tx = await secretjs.tx.broadcast([addItemMsg], {
     gasLimit: 5000000,
   });
 
@@ -220,7 +233,7 @@ describe("tx.compute and query.compute", () => {
         codeId,
         // codeHash, // Test MsgInstantiateContract without codeHash
         initMsg: {
-          prng_seed: "waehfjklasd",
+          msg: "hey, initialized",
         },
         label: `label-${Date.now()}`,
         initFunds: [],
@@ -234,19 +247,30 @@ describe("tx.compute and query.compute", () => {
 
     contractAddress = getValueFromRawLog(txInit.rawLog, "wasm.contract_address");
 
-    viewingKey = await performCreateViewingKey(secretjs, contractAddress);
+    viewingKey = await performSetViewingKey(secretjs, contractAddress);
   });
 
-  test("Perform ____", async () => {
+  test("Perform Add Item", async () => {
     const { secretjs } = accounts[0];
+    let staticItemData: StaticItemData = {
+      name: "Cool item",
+      category: "laptops",
+      url: "www.item.com",
+      img_url: "www.image-item.com",
+      seller_address: "sellerAddress",
+      seller_email: "seller@email.com",
+      price: 1000,
+      wanted_price: 900,
+      group_size_goal: 10,
+    };
 
-    await performSomething(contractAddress, secretjs, "add", "2");
+    await performSomething(contractAddress, secretjs, "add_item", staticItemData);
 
-    const result = (await secretjs.query.compute.queryContract({
-      address: contractAddress,
-      codeHash: contractCodeHash,
-      query: { get_history: {address: accounts[0].address, key: viewingKey, page_size: 1} },
-    })) as Result;
+    // const result = (await secretjs.query.compute.queryContract({
+    //   address: contractAddress,
+    //   codeHash: contractCodeHash,
+    //   query: { get_items: {category: "laptops", address: accounts[0].address, key: viewingKey} },
+    // })) as Result;
 
     // expect(result).toStrictEqual(
     //   {

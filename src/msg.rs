@@ -69,7 +69,7 @@ impl RemoveItemData {
     ) -> StdResult<()> {
         let vk = ViewingKey(self.verification_key.clone());
 
-        let canonical_addr = deps.api.canonical_address(&address)?;
+        let canonical_addr = deps.api.canonical_address(address)?;
 
         let expected_key = ViewingKey::read_viewing_key(&deps.storage, &canonical_addr);
 

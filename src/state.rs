@@ -4,10 +4,7 @@ use secret_toolkit::{
 };
 use serde::Serialize;
 
-use crate::msg::{
-    ItemData, ResponseStatus, StaticItemData, UpdateItemData, UserContactData, UserItemDetails,
-    UserProductQuantity,
-};
+use crate::msg::{StaticItemData, UpdateItemData, UserItemDetails, UserProductQuantity};
 
 use cosmwasm_std::{HumanAddr, ReadonlyStorage, StdError, StdResult, Storage};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
@@ -83,11 +80,9 @@ pub fn get_category_items<S: ReadonlyStorage>(
         return Ok(vec![]);
     };
 
-    let items_static_data: StdResult<Vec<StaticItemData>> = store
-        .iter()
-        .map(|itemData| itemData.and_then(|x| Ok(x)))
-        .collect();
-    Ok(items_static_data?)
+    let items_static_data: StdResult<Vec<StaticItemData>> = store.iter().collect();
+    items_static_data
+    // Ok(items_static_data?)
 }
 
 // remove_category_items(&mut deps.storage, &static_prefix, &update_item_data.url)?;
@@ -101,7 +96,7 @@ pub fn remove_category_item<S: Storage>(
 
     match storage.len() {
         0 => Ok(()),
-        len @ _ => {
+        len => {
             let mut c: u32 = 0;
             for item_data in storage.iter() {
                 let unwrapped = item_data?;
@@ -164,7 +159,7 @@ pub fn update_current_group_size<S: Storage>(
 ) -> StdResult<()> {
     let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic, key], storage);
     let mut storage = AppendStoreMut::attach_or_create(&mut storage)?;
-    if storage.len() > 0 {
+    if !storage.is_empty() {
         storage.pop()?;
     }
     storage.push(&value)
@@ -185,14 +180,11 @@ pub fn get_category_item_group_size<S: ReadonlyStorage>(
         return Ok(None);
     };
 
-    let item_dynamic_data: StdResult<Vec<u32>> = store
-        .iter()
-        .map(|dynamic_data| dynamic_data.and_then(|x| Ok(x)))
-        .collect();
+    let item_dynamic_data: StdResult<Vec<u32>> = store.iter().collect();
 
     let unwraped = item_dynamic_data?;
-    if unwraped.len() > 0 {
-        return Ok(Some(unwraped[0].clone()));
+    if !unwraped.is_empty() {
+        return Ok(Some(unwraped[0]));
     }
 
     Ok(None)
@@ -261,7 +253,7 @@ pub fn remove_user_item_quantity<S: Storage>(
 
     match storage.len() {
         0 => Ok(()),
-        len @ _ => {
+        len => {
             let mut c: u32 = 0;
             for user_item_quantity in storage.iter() {
                 let unwrapped = user_item_quantity?;
@@ -299,7 +291,7 @@ pub fn update_user_item_quantity<S: Storage>(
 
     match storage.len() {
         0 => Ok(()),
-        len @ _ => {
+        len => {
             let mut c: u32 = 0;
             for user_item_quantity in storage.iter() {
                 let unwrapped = user_item_quantity?;
@@ -347,11 +339,9 @@ pub fn get_ctegory_user_items_quantities<S: ReadonlyStorage>(
         return Ok(vec![]);
     };
 
-    let user_category_items: StdResult<Vec<UserProductQuantity>> = store
-        .iter()
-        .map(|item_data| item_data.and_then(|x| Ok(x)))
-        .collect();
-    Ok(user_category_items?)
+    let user_category_items: StdResult<Vec<UserProductQuantity>> = store.iter().collect();
+    user_category_items
+    // Ok(user_category_items?)
 }
 
 // Elad: unify this function with get_category_item_by_url()
@@ -404,7 +394,7 @@ pub fn get_category_item_user_details<S: ReadonlyStorage>(
     for user_item_details in store.iter() {
         let unwrapped = user_item_details?;
         if unwrapped.account_address == *user_address {
-            return Ok(Some(unwrapped.clone()));
+            return Ok(Some(unwrapped));
         }
     }
     Ok(None)
@@ -446,7 +436,7 @@ pub fn remove_category_item_user_details<S: Storage>(
 
     match storage.len() {
         0 => Ok(()),
-        len @ _ => {
+        len => {
             let mut c: u32 = 0;
             for user_item_quantity in storage.iter() {
                 let unwrapped = user_item_quantity?;
@@ -484,9 +474,9 @@ pub fn remove_all_category_item_users_details<S: Storage>(
 
     match storage.len() {
         0 => Ok(()),
-        len @ _ => {
-            for x in 0..len {
-                storage.pop();
+        len => {
+            for _x in 0..len {
+                storage.pop()?;
             }
             Ok(())
         }
@@ -504,7 +494,7 @@ pub fn update_category_item_user_details<S: Storage>(
 
     match storage.len() {
         0 => Ok(()),
-        len @ _ => {
+        len => {
             let mut c: u32 = 0;
             for user_item_quantity in storage.iter() {
                 let unwrapped = user_item_quantity?;
