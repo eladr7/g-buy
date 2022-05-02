@@ -10,10 +10,51 @@ import { AminoWallet } from "./src/wallet_amino";
 
 const exec = util.promisify(require("child_process").exec);
 
+
+type StaticItemData = {
+  name: string,
+  category: string, // Elad: Might be redundant.
+  url: string,
+  img_url: string,
+  seller_address: string,
+  seller_email: string,
+  price: string,
+  wanted_price: string,
+  group_size_goal: number,
+} 
+
+type ItemData = {
+  static_data: StaticItemData,
+  current_group_size: number,
+}
+
+type UserProductQuantity = {
+  url: string,
+  quantity: number,
+}
+
+type UserContactData = {
+  email: string,
+  delivery_address: string,
+}
 type Result = {
+  items: ItemData[];
+  user_items: UserProductQuantity[];
+  contact_data?: UserContactData;
   status: string;
-  result: string[];
 };
+
+type UserItemDetails = {
+  account_address: string,
+  contact_data: UserContactData,
+  quantity: number,
+}
+
+type UpdateItemData = {
+  category: string,
+  url: string,
+  user_details: UserItemDetails,
+}
 
 type Account = {
   name: string;
@@ -26,17 +67,6 @@ type Account = {
   secretjs: SecretNetworkClient;
 };
 
-type StaticItemData = {
-  name: string,
-  category: string, // Elad: Might be redundant.
-  url: string,
-  img_url: string,
-  seller_address: string,
-  seller_email: string,
-  price: number,
-  wanted_price: number,
-  group_size_goal: number,
-} 
 
 const accounts: Account[] = [];
 
@@ -66,15 +96,15 @@ function getValueFromRawLog(rawLog: string | undefined, key: string): string {
   return "";
 }
 
-async function performSetViewingKey(secretjs: SecretNetworkClient, contractAddress: string) {
+async function performSetViewingKey(secretjs: SecretNetworkClient, contractAddress: string, viewingKey: string) {
   const txExec = await secretjs.tx.compute.executeContract(
     {
-      sender: accounts[0].address,
+      sender: secretjs.address,
       contract: contractAddress,
       // codeHash,
       msg: {
         set_viewing_key: {
-          key: "wefhjyr",
+          key: viewingKey,
         },
       },
     },
@@ -83,20 +113,17 @@ async function performSetViewingKey(secretjs: SecretNetworkClient, contractAddre
     }
   );
   console.log(fromUtf8(txExec.data[0]))
-  expect(fromUtf8(txExec.data[0])).toContain(
-    '{"set_viewing_key":{"status":"'
-  );
-  const viewingKey = JSON.parse(fromUtf8(txExec.data[0])).set_viewing_key.key;
-  return viewingKey;
+
+  const status = JSON.parse(fromUtf8(txExec.data[0])).set_viewing_key.status;
+  expect(status).toBe('success');
+  return status;
 }
 
-async function performSomething(contractAddress: string, secretjs: SecretNetworkClient, operation: string, param: StaticItemData) {
-  let addItemMsg: MsgExecuteContract;
-
-    addItemMsg = new MsgExecuteContract({
-      sender: accounts[0].address,
+async function performSomething(contractAddress: string, contractCodeHash: string, secretjs: SecretNetworkClient, senderAddress: string, operation: string, param: object) {
+  let addItemMsg = new MsgExecuteContract({
+      sender: senderAddress,
       contract: contractAddress,
-      // codeHash, // Test MsgExecuteContract without codeHash
+      codeHash: contractCodeHash, // Test MsgExecuteContract without codeHash
       msg: { [operation]: {...param} },
       sentFunds: [],
     });
@@ -111,8 +138,57 @@ async function performSomething(contractAddress: string, secretjs: SecretNetwork
     contractAddress
   );
   // Check decryption
-  expect(tx.arrayLog![4].key).toBe("contract_address");
-  expect(tx.arrayLog![4].value).toBe(contractAddress);
+  // expect(tx.arrayLog![4].key).toBe("contract_address");
+  // expect(tx.arrayLog![4].value).toBe(contractAddress);
+}
+
+function create_update_msg(quantity: number, userAddress: string) {
+  let user_details: UserItemDetails =  {
+      account_address: userAddress,
+      contact_data: {
+          delivery_address: "user delivery address",
+          email: "user@email.com",
+      },
+      quantity: quantity,
+  };
+  let update_item_data: UpdateItemData = {
+      category: "laptops",
+      url: "www.item.com",
+      user_details: user_details,
+  };
+  return update_item_data
+}
+
+async function sendFunds(secretjs: SecretNetworkClient, fromAddress: string, toAddress: string) {
+  const tx = await secretjs.tx.bank.send(
+    {
+      fromAddress: fromAddress,
+      toAddress: toAddress,
+      amount: [{ denom: "uscrt", amount: "10000000" }],
+    },
+    {
+      gasLimit: 20_000,
+    },
+  );
+}
+
+function assert_fetched_data_after_update(
+  fetched_data: Result,
+  expected_len: number,
+  expected_quantity: number,
+  expected_group_size: number,
+) {
+  expect(fetched_data.user_items.length).toBe(expected_len);
+  expect(fetched_data.user_items[0].url).toBe("www.item.com");
+  expect(fetched_data.user_items[0].quantity).toBe(expected_quantity);
+  expect(
+      fetched_data.contact_data!.email
+  ).toBe("user@email.com");
+  expect(fetched_data.items[0].static_data.price).toBe("1000");
+  expect(
+      fetched_data.items[0].current_group_size
+  ).toBe(expected_group_size);
+  expect(fetched_data.status).toBe("success");
 }
 
 beforeAll(async () => {
@@ -131,7 +207,7 @@ beforeAll(async () => {
     // Wait for the network to start (i.e. block number >= 1)
     console.log("Waiting for the network to start...");
 
-    const timeout = Date.now() + 30_000;
+    const timeout = Date.now() + 300_000;
     while (true) {
       expect(Date.now()).toBeLessThan(timeout);
 
@@ -198,10 +274,13 @@ afterAll(async () => {
 describe("tx.compute and query.compute", () => {
   let contractAddress: string;
   let contractCodeHash: string;
-  let viewingKey: string;
+  let viewingKey: string = "wefhjyr";
+  let sellerAddress: string;
+  let userAddress: string;
 
   beforeAll(async () => {
     const { secretjs } = accounts[0];
+    const userSecretjs = accounts[1].secretjs;
     const txStore = await secretjs.tx.compute.storeCode(
       {
         sender: accounts[0].address,
@@ -247,38 +326,111 @@ describe("tx.compute and query.compute", () => {
 
     contractAddress = getValueFromRawLog(txInit.rawLog, "wasm.contract_address");
 
-    viewingKey = await performSetViewingKey(secretjs, contractAddress);
+    await performSetViewingKey(userSecretjs, contractAddress, viewingKey);
+
+    sellerAddress = accounts[0].address;
+    userAddress = accounts[1].address;
   });
 
-  test("Perform Add Item", async () => {
+  test("add new item", async () => {
     const { secretjs } = accounts[0];
+    const userSecretjs = accounts[1].secretjs;
     let staticItemData: StaticItemData = {
       name: "Cool item",
       category: "laptops",
       url: "www.item.com",
       img_url: "www.image-item.com",
-      seller_address: "sellerAddress",
+      seller_address: sellerAddress,
       seller_email: "seller@email.com",
-      price: 1000,
-      wanted_price: 900,
+      price: "1000",
+      wanted_price: "900",
       group_size_goal: 10,
     };
 
-    await performSomething(contractAddress, secretjs, "add_item", staticItemData);
+    await performSomething(contractAddress, contractCodeHash, secretjs, sellerAddress, "add_item", staticItemData);
 
-    // const result = (await secretjs.query.compute.queryContract({
-    //   address: contractAddress,
-    //   codeHash: contractCodeHash,
-    //   query: { get_items: {category: "laptops", address: accounts[0].address, key: viewingKey} },
-    // })) as Result;
+    const result = (await userSecretjs.query.compute.queryContract({
+      address: contractAddress,
+      codeHash: contractCodeHash,
+      query: { get_items: {category: "laptops", address: userAddress, key: viewingKey} },
+    })) as Result;
 
-    // expect(result).toStrictEqual(
-    //   {
-    //     status: "Calculations history present",
-    //     result: ["2 + 3 = 5"],
-    //   },
-    // );
+    expect(result.items[0].static_data.price).toStrictEqual('1000');
+    expect(result.items[0].current_group_size).toStrictEqual(0);
   });
 
 
+  test("update new user for item, goal not reached", async () => {
+    const { secretjs } = accounts[0];
+    const userSecretjs = accounts[1].secretjs;
+
+    let staticItemData: StaticItemData = {
+      name: "Cool item",
+      category: "laptops",
+      url: "www.item.com",
+      img_url: "www.image-item.com",
+      seller_address: sellerAddress,
+      seller_email: "seller@email.com",
+      price: "1000",
+      wanted_price: "900",
+      group_size_goal: 10,
+    };
+
+    await performSomething(contractAddress, contractCodeHash, secretjs, sellerAddress, "add_item", staticItemData);
+
+    let update_item_data = create_update_msg(1, userSecretjs.address);
+    await performSomething(contractAddress, contractCodeHash, userSecretjs, userAddress, "update_item", update_item_data);
+
+
+    const result = (await userSecretjs.query.compute.queryContract({
+      address: contractAddress,
+      codeHash: contractCodeHash,
+      query: { get_items: {category: "laptops", address: userAddress, key: viewingKey} },
+    })) as Result;
+
+    assert_fetched_data_after_update(result, 1, 1, 1);
+  
+  });
+
+  test("update new user for item, goal reached", async () => {
+    const { secretjs } = accounts[0];
+    const userSecretjs = accounts[1].secretjs;
+
+    let staticItemData: StaticItemData = {
+      name: "Cool item",
+      category: "laptops",
+      url: "www.item.com",
+      img_url: "www.image-item.com",
+      seller_address: sellerAddress,
+      seller_email: "seller@email.com",
+      price: "1000",
+      wanted_price: "900",
+      group_size_goal: 10,
+    };
+
+    await performSomething(contractAddress, contractCodeHash, secretjs, sellerAddress, "add_item", staticItemData);
+    await sendFunds(userSecretjs, userAddress, contractAddress);
+    let update_item_data = create_update_msg(10, userAddress);
+
+    // Send fund to the contact - to simulate what should happen in the client side
+    const balance = await secretjs.query.bank.balance({
+      address: userAddress,
+      denom: "uscrt",
+    });
+    console.log("User balance is: ", balance.balance!.amount);
+    await performSomething(contractAddress, contractCodeHash, userSecretjs, userAddress, "update_item", update_item_data);
+
+
+    const result = (await userSecretjs.query.compute.queryContract({
+      address: contractAddress,
+      codeHash: contractCodeHash,
+      query: { get_items: {category: "laptops", address: userAddress, key: viewingKey} },
+    })) as Result;
+
+    expect(result.user_items.length).toBe(0);
+    expect(result.contact_data).toBe(null);
+    expect(result.items.length).toBe(0);
+    expect(result.status).toBe("success");
+//   Todo: Verify accounts balances (contract, seller)
+  });
 });

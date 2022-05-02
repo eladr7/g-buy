@@ -604,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_new_item_goal_not_reached() -> StdResult<()> {
+    fn test_update_new_user_item_goal_not_reached() -> StdResult<()> {
         // Initialize the contract
         let (init_result, mut deps) = init_helper();
         assert!(
@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_new_item_goal_reached() -> StdResult<()> {
+    fn test_update_new_user_item_goal_reached() -> StdResult<()> {
         // Initialize the contract
         let (init_result, mut deps) = init_helper();
         assert!(
