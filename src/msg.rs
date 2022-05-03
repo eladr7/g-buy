@@ -7,10 +7,10 @@ use crate::viewing_key::{ViewingKey, VIEWING_KEY_SIZE};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
     // User supplied entropy string for pseudorandom number generator seed
-    // pub prng_seed: String,
-    // /// The entropy for creating the viewing key to be used by all users of the application
-    // pub entropy: String,
-    pub msg: String,
+// pub prng_seed: String,
+// /// The entropy for creating the viewing key to be used by all users of the application
+// pub entropy: String,
+// pub msg: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
@@ -67,6 +67,7 @@ impl RemoveItemData {
         deps: &Extern<S, A, Q>,
         address: &HumanAddr,
     ) -> StdResult<()> {
+        // Todo: Authenticate against the address of the seller! not with the user who tries to delete
         let vk = ViewingKey(self.verification_key.clone());
 
         let canonical_addr = deps.api.canonical_address(address)?;

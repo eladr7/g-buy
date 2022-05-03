@@ -199,7 +199,9 @@ pub fn remove_current_group_size<S: Storage>(
     let mut storage = AppendStoreMut::<u32, _, _>::attach_or_create(&mut storage)?;
 
     // This store will always have one item for a product
-    storage.pop()?;
+    if (storage.len() > 0) {
+        storage.pop()?;
+    }
 
     Ok(())
 }

@@ -304,7 +304,7 @@ fn transfer_funds(
             to_address,
             amount: vec![Coin {
                 denom: "uscrt".into(),
-                amount: Uint128(amount),
+                amount: Uint128(amount * 1000000),
             }],
         })],
         log: vec![],
@@ -408,7 +408,7 @@ mod tests {
         let env = mock_env("instantiator", &coins(1000, "token"));
 
         let init_msg = InitMsg {
-            msg: String::from("initialized"),
+            // msg: String::from("initialized"),
         };
 
         (init(&mut deps, env, init_msg), deps)
