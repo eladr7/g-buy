@@ -13,7 +13,7 @@ const exec = util.promisify(require("child_process").exec);
 
 type StaticItemData = {
   name: string,
-  category: string, // Elad: Might be redundant.
+  category: string,
   url: string,
   img_url: string,
   seller_address: string,

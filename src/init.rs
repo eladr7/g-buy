@@ -7,6 +7,5 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     _env: Env,
     _msg: InitMsg,
 ) -> StdResult<InitResponse> {
-    // Elad: may add a maximum number of products
     Ok(InitResponse::default())
 }

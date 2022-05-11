@@ -1,8 +1,4 @@
-use secret_toolkit::{
-    serialization::{Bincode2, Serde},
-    storage::{AppendStore, AppendStoreMut},
-};
-use serde::Serialize;
+use secret_toolkit::storage::{AppendStore, AppendStoreMut};
 
 use crate::msg::{StaticItemData, UpdateItemData, UserItemDetails, UserProductQuantity};
 
@@ -149,7 +145,6 @@ pub fn get_category_item_by_url<S: ReadonlyStorage>(
     Ok(None)
 }
 
-// Elad: can be done with regular storage: the key will be sha256(url + categoryPrefixDynamic)
 // [CATEGORY_DYNAMIC, url] ==> dynamic item data
 pub fn update_current_group_size<S: Storage>(
     storage: &mut S,
@@ -199,26 +194,11 @@ pub fn remove_current_group_size<S: Storage>(
     let mut storage = AppendStoreMut::<u32, _, _>::attach_or_create(&mut storage)?;
 
     // This store will always have one item for a product
-    if (storage.len() > 0) {
+    if !storage.is_empty() {
         storage.pop()?;
     }
 
     Ok(())
-}
-
-// for_address.as_slice()
-// Used both for url => Vec<UserItemDetails>
-//     and  userAddr => Vec<UserProductQuantity>
-// [CATEGORY_USERS_DATA, url/userAddress] ==> UserItemDetails
-pub fn save_category_element<T: Serialize, S: Storage>(
-    storage: &mut S,
-    key: &[u8],
-    prefix_dynamic: &[u8], // key is the hash of the seller address with the item url
-    value: &T,
-) -> StdResult<()> {
-    let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic, key], storage);
-    let mut storage = AppendStoreMut::attach_or_create(&mut storage)?;
-    storage.push(&Bincode2::serialize(value)?)
 }
 
 pub fn save_category_element_user<S: Storage>(
@@ -346,7 +326,6 @@ pub fn get_ctegory_user_items_quantities<S: ReadonlyStorage>(
     // Ok(user_category_items?)
 }
 
-// Elad: unify this function with get_category_item_by_url()
 // [CATEGORY_USERS_DATA, userAddress] ==> Vec<UserProductQuantity>
 pub fn get_category_user_items_quantities_by_url<S: ReadonlyStorage>(
     storage: &S,
@@ -381,7 +360,6 @@ pub fn get_category_item_user_details<S: ReadonlyStorage>(
     key: &[u8],
     user_address: &HumanAddr,
 ) -> StdResult<Option<UserItemDetails>> {
-    // Elad: separate between [dynamic, url] of quantity and useritemdetails
     let store = ReadonlyPrefixedStorage::multilevel(&[prefix_dynamic_users, key], storage);
 
     // Try to access the storage of transfers for the account.
@@ -471,7 +449,6 @@ pub fn remove_all_category_item_users_details<S: Storage>(
     key: &[u8],
 ) -> StdResult<()> {
     let mut storage = PrefixedStorage::multilevel(&[prefix_dynamic_users, key], storage);
-    // storage.remove(key); // Elad: Check
     let mut storage = AppendStoreMut::<UserItemDetails, _, _>::attach_or_create(&mut storage)?;
 
     match storage.len() {

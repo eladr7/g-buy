@@ -33,8 +33,6 @@ pub fn viewing_keys_queries<S: Storage, A: Api, Q: Querier>(
     }
 }
 
-// Elad: move out the get prefix function to the calling function!
-// Elad: Replace all String with the proper &str
 pub fn may_get_items<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     account: &HumanAddr,

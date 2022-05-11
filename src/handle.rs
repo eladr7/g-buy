@@ -2,24 +2,17 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::{
-    msg::{
-        HandleAnswer, HandleMsg, RemoveItemData, ResponseStatus, StaticItemData, UpdateItemData,
-        UserProductQuantity,
-    },
+    msg::{HandleAnswer, HandleMsg, RemoveItemData, ResponseStatus, StaticItemData},
     state::{
-        get_all_participating_users_addresses, get_category_item_by_url,
-        get_category_item_group_size, get_category_prefixes,
-        get_category_user_items_quantities_by_url, remove_all_category_item_users_details,
-        remove_category_item, remove_category_item_user_details, remove_current_group_size,
-        remove_user_item_quantity, save_category_element_user,
-        save_category_element_user_item_details, save_new_item, update_category_item_user_details,
-        update_current_group_size, update_user_item_quantity,
+        get_all_participating_users_addresses, get_category_prefixes,
+        remove_all_category_item_users_details, remove_category_item, remove_current_group_size,
+        remove_user_item_quantity, save_new_item, update_current_group_size,
     },
+    update_logic::update_user_for_item,
     viewing_key::ViewingKey,
 };
 use cosmwasm_std::{
-    to_binary, Api, BankMsg, Coin, CosmosMsg, Env, Extern, HandleResponse, HumanAddr, Querier,
-    StdError, StdResult, Storage, Uint128,
+    to_binary, Api, Env, Extern, HandleResponse, Querier, StdError, StdResult, Storage,
 };
 use secret_toolkit::crypto::sha_256;
 
@@ -66,262 +59,6 @@ fn add_new_item<S: Storage, A: Api, Q: Querier>(
     })
 }
 
-fn update_user_for_item<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    update_item_data: UpdateItemData,
-) -> StdResult<HandleResponse> {
-    // Elad: Can add authentication with the viewing key
-    let sender_canonical_address = deps.api.canonical_address(&env.message.sender)?;
-
-    // Verify the new quantity is a non-negative number
-    let new_quantity = update_item_data.user_details.quantity;
-    // if new_quantity < 0 {
-    //     return Err(StdError::generic_err(
-    //         "Item quantity smaller than 0 is not allowed",
-    //     ));
-    // }
-
-    // Get the current product count of units: [dynamic_prefix, url]
-    let (static_prefix, dynamic_prefix, dynamic_prefix_users) =
-        get_category_prefixes(update_item_data.category.as_bytes())?;
-    let url_key = sha_256(base64::encode(update_item_data.url.clone()).as_bytes());
-
-    //    find [category] --> (url) and get price
-    let item_data =
-        match get_category_item_by_url(&deps.storage, static_prefix, &update_item_data.url)? {
-            Some(v) => v,
-            None => {
-                return Err(StdError::generic_err(
-                    "Item data wasn't found. It should exist in this context",
-                ))
-            }
-        };
-
-    let current_group_size =
-        match get_category_item_group_size(&deps.storage, dynamic_prefix, &url_key)? {
-            Some(current_group_size) => current_group_size,
-            None => return Err(StdError::generic_err("This item does not exist anymore")),
-        };
-
-    // The item exists and the new user quantity is proper
-
-    // Find the old user count:  [dynamic_prefix, address] => (url, quanity)
-    let old_quantity_obj = get_category_user_items_quantities_by_url(
-        &deps.storage,
-        dynamic_prefix,
-        sender_canonical_address.as_slice(),
-        &update_item_data.url,
-    )?;
-
-    if old_quantity_obj == None {
-        if new_quantity == 0 {
-            return Err(StdError::generic_err(
-                "Cannot join a purchasing group with 0 quantity",
-            ));
-        }
-
-        // old_quantity_obj == NULL, new_quantity >0
-
-        // If the goal is reached - transfer funds and and remove the item
-        if new_quantity + current_group_size >= item_data.group_size_goal {
-            // Elad: !!!!!!!!!!!!!!!!!
-            let seller_payment =
-                (current_group_size + new_quantity) as u128 * item_data.wanted_price.u128();
-            let transfer_funds_msg = transfer_funds(
-                &env.contract.address,
-                &HumanAddr(item_data.seller_address),
-                seller_payment,
-            )?;
-
-            remove_item_authenticated(&update_item_data.category, &update_item_data.url, deps)?;
-
-            return Ok(transfer_funds_msg);
-        }
-
-        // Save the new user quantity for this url
-        let url = update_item_data.url.clone();
-        let user_product_quantity = UserProductQuantity {
-            url,
-            quantity: new_quantity,
-        };
-        save_category_element_user(
-            &mut deps.storage,
-            sender_canonical_address.as_slice(),
-            dynamic_prefix,
-            &user_product_quantity,
-        )?;
-
-        // Update the current group size for this item
-        update_current_group_size(
-            &mut deps.storage,
-            &url_key,
-            dynamic_prefix,
-            current_group_size + new_quantity,
-        )?;
-
-        // Add the user details for this item
-        save_category_element_user_item_details(
-            &mut deps.storage,
-            &url_key,
-            dynamic_prefix_users,
-            &update_item_data.user_details,
-        )?;
-
-        return Ok(HandleResponse {
-            messages: vec![],
-            log: vec![],
-            data: Some(to_binary(&HandleAnswer::UpdateItem {
-                status: ResponseStatus::Success,
-            })?),
-        });
-    }
-
-    let old_quantity = old_quantity_obj.unwrap().quantity;
-
-    // old_quantity is positive
-
-    if new_quantity == 0 {
-        // old_quantity > 0, new_quantity == 0
-
-        // Update the current group size of this item to 'current_group_size  - old_quantity'
-        update_current_group_size(
-            &mut deps.storage,
-            &url_key,
-            dynamic_prefix,
-            current_group_size - old_quantity,
-        )?;
-
-        // Remove the user details entry for this item
-        remove_category_item_user_details(
-            &mut deps.storage,
-            dynamic_prefix_users,
-            &url_key,
-            &env.message.sender,
-        )?;
-
-        // Remove the count for this item (Find it by its URL)
-        remove_user_item_quantity(
-            &mut deps.storage,
-            dynamic_prefix,
-            sender_canonical_address.as_slice(),
-            &update_item_data.url,
-        )?;
-
-        // Elad: !!!!!!!!!!!!!!!!!
-        // refund the user: (the client side should charge the comission for that)
-        let refund_amount = (old_quantity as u128) * item_data.wanted_price.u128();
-        let transfer_funds_msg = transfer_funds(
-            &env.contract.address,
-            &update_item_data.user_details.account_address,
-            refund_amount,
-        )?;
-        return Ok(transfer_funds_msg);
-
-        // return Ok(HandleResponse {
-        //     messages: vec![],
-        //     log: vec![],
-        //     data: Some(to_binary(&HandleAnswer::UpdateItem {
-        //         status: ResponseStatus::Success,
-        //     })?),
-        // });
-    }
-
-    // old_quantity >0 , new_quantity > 0
-
-    // Update the current group size for this item
-    update_current_group_size(
-        &mut deps.storage,
-        &url_key,
-        dynamic_prefix,
-        current_group_size + new_quantity - old_quantity,
-    )?;
-
-    // Update the user details for this item
-    update_category_item_user_details(
-        &mut deps.storage,
-        dynamic_prefix_users,
-        &url_key,
-        &update_item_data,
-    )?;
-
-    // Update the user item quantity
-    update_user_item_quantity(
-        &mut deps.storage,
-        dynamic_prefix,
-        sender_canonical_address.as_slice(),
-        &update_item_data,
-    )?;
-
-    if new_quantity < old_quantity {
-        // Elad: !!!!!!!!!!!!!!!!!
-        // refund the user: (the client side should charge the comission for that)
-        let refund_amount = (old_quantity - new_quantity) as u128 * item_data.wanted_price.u128();
-        let transfer_funds_msg = transfer_funds(
-            &env.contract.address,
-            &update_item_data.user_details.account_address,
-            refund_amount,
-        )?;
-        return Ok(transfer_funds_msg);
-    }
-
-    // If the group size goal was reached, pay the seller and remove the item
-    if new_quantity > old_quantity
-        && current_group_size + new_quantity - old_quantity >= item_data.group_size_goal
-    {
-        // Elad: !!!!!!!!!!!!!!!!!
-        let seller_payment = (current_group_size + new_quantity - old_quantity) as u128
-            * item_data.wanted_price.u128();
-        let transfer_funds_msg = transfer_funds(
-            &env.contract.address,
-            &HumanAddr(item_data.seller_address),
-            seller_payment,
-        )?;
-
-        remove_item_authenticated(&update_item_data.category, &update_item_data.url, deps)?;
-        return Ok(transfer_funds_msg);
-    }
-
-    Ok(HandleResponse {
-        messages: vec![],
-        log: vec![],
-        data: Some(to_binary(&HandleAnswer::UpdateItem {
-            status: ResponseStatus::Success,
-        })?),
-    })
-}
-
-fn transfer_funds(
-    from_address: &HumanAddr,
-    to_address: &HumanAddr,
-    amount: u128,
-) -> StdResult<HandleResponse> {
-    let from_address = from_address.clone();
-    let to_address = to_address.clone();
-    let msg = HandleResponse {
-        messages: vec![CosmosMsg::Bank(BankMsg::Send {
-            from_address,
-            to_address,
-            amount: vec![Coin {
-                denom: "uscrt".into(),
-                amount: Uint128(amount * 1000000),
-            }],
-        })],
-        log: vec![],
-        data: None,
-    };
-    // CosmosMsg::Bank(BankMsg::Send {
-    //     from_address: *from_address,
-    //     to_address: *to_address,
-    //     amount: vec![Coin {
-    //         denom: "uscrt".into(),
-    //         amount: Uint128(amount.into()),
-    //     }],
-    // });
-
-    Ok(msg)
-}
-
 fn remove_item<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
@@ -340,7 +77,7 @@ fn remove_item<S: Storage, A: Api, Q: Querier>(
     })
 }
 
-fn remove_item_authenticated<S: Storage, A: Api, Q: Querier>(
+pub fn remove_item_authenticated<S: Storage, A: Api, Q: Querier>(
     category: &str,
     url: &str,
     deps: &mut Extern<S, A, Q>,
@@ -392,13 +129,15 @@ pub fn set_viewing_key<S: Storage, A: Api, Q: Querier>(
 #[cfg(test)]
 mod tests {
     use crate::contract::init;
-    use crate::msg::{GetItems, InitMsg, QueryMsg, UserContactData, UserItemDetails};
+    use crate::msg::{
+        GetItems, InitMsg, QueryMsg, UpdateItemData, UserContactData, UserItemDetails,
+    };
     use crate::query::query;
     use crate::viewing_key::ViewingKey;
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage};
-    use cosmwasm_std::{coins, from_binary, InitResponse};
+    use cosmwasm_std::{coins, from_binary, HumanAddr, InitResponse, Uint128};
 
     fn init_helper() -> (
         StdResult<InitResponse>,

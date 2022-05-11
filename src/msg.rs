@@ -5,13 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::viewing_key::{ViewingKey, VIEWING_KEY_SIZE};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct InitMsg {
-    // User supplied entropy string for pseudorandom number generator seed
-// pub prng_seed: String,
-// /// The entropy for creating the viewing key to be used by all users of the application
-// pub entropy: String,
-// pub msg: String,
-}
+pub struct InitMsg {}
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -29,14 +23,14 @@ pub struct UserContactData {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct UserItemDetails {
     pub account_address: HumanAddr,
-    pub contact_data: UserContactData, // Elad: Option<>
+    pub contact_data: UserContactData,
     pub quantity: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct StaticItemData {
     pub name: String,
-    pub category: String, // Elad: Might be redundant.
+    pub category: String,
     pub url: String,
     pub img_url: String,
     pub seller_address: String,
@@ -44,15 +38,14 @@ pub struct StaticItemData {
     pub price: Uint128,
     pub wanted_price: Uint128,
     pub group_size_goal: u32,
-} // Elad: authenticate category
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct UpdateItemData {
     /// url is the unique identifier of the product (could be also the creator address)
     pub category: String,
     pub url: String,
-    pub user_details: UserItemDetails, //Elad: verify quantity is not 0 for a new user or seprate: AddUser/UpdateUser
-                                       // Elad: refund the user if the new ammount is smaller than the old
+    pub user_details: UserItemDetails,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
